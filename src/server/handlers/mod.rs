@@ -1,1 +1,1 @@
-mod admin;
+pub mod admin;

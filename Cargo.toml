@@ -6,6 +6,8 @@ edition = "2018"
 
 
 [dependencies]
+actix-cors = "0.2.0"
 actix-rt = "1.0"
 actix-web = "2.0"
 dotenv = "0.15"
+env_logger = "0.7"
