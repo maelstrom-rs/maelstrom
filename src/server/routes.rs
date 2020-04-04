@@ -8,5 +8,9 @@ pub fn config(cfg: &mut ServiceConfig) {
         "/.well-known/matrix/client",
         web::get().to(handlers::admin::get_wellknown),
     )
+    .route(
+        "/_matrix/client/version",
+        web::get().to(handlers::admin::get_versions),
+    )
     .service(web::scope("/_matrix/client/r0"));
 }
