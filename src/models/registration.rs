@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// The kind of account to register.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
