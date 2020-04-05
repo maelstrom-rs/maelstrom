@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS accounts;
 CREATE TABLE IF NOT EXISTS accounts (
   -- The Matrix user ID localpart for this account
   localpart TEXT NOT NULL PRIMARY KEY,
