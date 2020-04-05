@@ -9,7 +9,7 @@ pub fn config(cfg: &mut ServiceConfig) {
         web::get().to(handlers::admin::get_wellknown),
     )
     .route(
-        "/_matrix/client/version",
+        "/_matrix/client/versions",
         web::get().to(handlers::admin::get_versions),
     )
     .service(web::scope("/_matrix/client/r0").route(
