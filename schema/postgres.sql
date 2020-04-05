@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_ts BIGINT NOT NULL,
   -- The password hash for this account. Can be NULL if this is a passwordless account.
   password_hash TEXT,
+  -- Random salt added to password for hashing
+  password_salt TEXT,
   -- Identifies which application service this account belongs to, if any.
   appservice_id TEXT,
   -- Is this account a server admin
