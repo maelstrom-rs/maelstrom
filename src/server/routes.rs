@@ -12,5 +12,8 @@ pub fn config(cfg: &mut ServiceConfig) {
         "/_matrix/client/version",
         web::get().to(handlers::admin::get_versions),
     )
-    .service(web::scope("/_matrix/client/r0"));
+    .service(web::scope("/_matrix/client/r0").route(
+        "/register",
+        web::post().to(handlers::registration::post_register),
+    ));
 }
