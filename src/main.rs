@@ -1,5 +1,4 @@
 use dotenv::dotenv;
-use server::api;
 
 mod models;
 mod server;
@@ -9,7 +8,7 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
 
     let config = server::Config::new_from_env();
-    let _server = api::start(config).await;
+    let _server = server::start(config).await;
 
     Ok(())
 }
