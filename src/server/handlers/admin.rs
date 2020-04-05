@@ -31,9 +31,7 @@ pub async fn get_wellknown() -> Result<HttpResponse, Error> {
 /// the spec to give clients a chance to upgrade appropriately. Additionally, clients should
 /// avoid using unstable features in their stable releases.
 pub async fn get_versions() -> Result<HttpResponse, Error> {
-    Ok(HttpResponse::Ok().json(json!({
-        "versions":["r0.5.0"]
-    })))
+    Ok(HttpResponse::Ok().body("{{\"versions\":[\"r0.5.0\"]}}"))
 }
 
 #[cfg(test)]
