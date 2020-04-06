@@ -1,6 +1,6 @@
 # Maelstrom ![](https://github.com/maelstrom-rs/maelstrom/workflows/Build/badge.svg)
 
-A high-performance [Matrix](https://matrix.org) Home-Server designed to have a plugable storage engine, scalable, and light on resources.
+A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](rust-lang.org) designed to have a plugable storage engine, scalable, and light on resources.
 
 ## Project Status
 
@@ -18,6 +18,24 @@ This is a brand new project under **daily** active development. It is not curren
 
 This project started due to a strong interest/support of Web 3.0 (decentralized web applications). Additionally,
 having a performant embeddable home server can enable a stronger usecase for decentralized IoT applications in addition to chat.
+
+## Building & Running
+
+### Using Rust
+
+```bash
+# install rust if needed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# clone repo and cd
+git clone https://github.com/maelstrom-rs/maelstrom.git && cd maelstrom
+
+# copy .env-example and set with your specific settings
+cp .env-example .env
+
+# build & run
+cargo run --release
+```
 
 ## Technologies Used
 
