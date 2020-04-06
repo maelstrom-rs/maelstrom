@@ -1,5 +1,8 @@
 # Maelstrom ![](https://github.com/maelstrom-rs/maelstrom/workflows/Build/badge.svg)
 
+![Alt text](./github/logo-banner.svg)
+<img src="./.github/logo-banner.svg">
+
 A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](rust-lang.org) designed to have a plugable storage engine, scalable, and light on resources.
 
 ## Project Status
