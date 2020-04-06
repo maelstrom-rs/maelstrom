@@ -6,6 +6,10 @@ A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](ru
 
 This is a brand new project under **daily** active development. It is not currently in usable form yet.
 
+### Completed Features
+
+You can review the [Closed Matrix-spec Issues](https://github.com/maelstrom-rs/maelstrom/issues?q=is%3Aissue+is%3Aclosed+sort%3Acreated-asc+label%3Amatrix-spec+) in the issue tracker for a list of completed features.
+
 ## Project Goals
 
 1. Performance, both in terms of scale and minimal resources.
