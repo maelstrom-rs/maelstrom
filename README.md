@@ -10,7 +10,7 @@ This is a brand new project under **daily** active development. It is not curren
 
 ### Completed Features
 
-You can review the [Closed Matrix-spec Issues](https://github.com/maelstrom-rs/maelstrom/issues?q=is%3Aissue+is%3Aclosed+sort%3Acreated-asc+label%3Amatrix-spec+) in the issue tracker for a list of completed features.
+You can review the [Closed `matrix-spec` Issues](https://github.com/maelstrom-rs/maelstrom/issues?q=is%3Aissue+is%3Aclosed+sort%3Acreated-asc+label%3Amatrix-spec+) in the issue tracker for a list of completed features.
 
 ## Project Goals
 
