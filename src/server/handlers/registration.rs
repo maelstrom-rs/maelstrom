@@ -1,4 +1,4 @@
-use crate::{models::registration, server::State};
+use crate::{db::Store, models::registration};
 use actix_web::{
     web::{Data, Json, Query},
     Error, HttpResponse,
@@ -39,12 +39,13 @@ use actix_web::{
 /// device_id for the account regardless of input.
 ///
 /// Any user ID returned by this API must conform to the grammar given in the Matrix specification_.
-pub async fn post_register(
+pub async fn post_register<T: Store>(
     params: Query<registration::RequestParams>,
     mut req: Json<registration::Request>,
-    state: Data<State>,
+    storage: Data<T>,
 ) -> Result<HttpResponse, Error> {
     req.kind = params.kind.clone();
+    println!("{}", storage.get_type());
 
     unimplemented!()
 }

@@ -1,4 +1,5 @@
 use super::handlers;
+use crate::db::PostgresStore;
 use actix_web::web;
 use actix_web::web::ServiceConfig;
 
@@ -14,6 +15,6 @@ pub fn config(cfg: &mut ServiceConfig) {
     )
     .service(web::scope("/_matrix/client/r0").route(
         "/register",
-        web::post().to(handlers::registration::post_register),
+        web::post().to(handlers::registration::post_register::<PostgresStore>),
     ));
 }

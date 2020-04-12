@@ -2,6 +2,7 @@ use actix_cors::Cors;
 use actix_web::{middleware::Logger, App, HttpServer};
 use jsonwebtoken as jwt;
 
+use crate::db;
 use crate::CONFIG;
 
 mod error;
@@ -58,8 +59,6 @@ impl Config {
     }
 }
 
-pub struct State {}
-
 /// Starts the server. Takes a `ServerConfig`.
 pub async fn start() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "actix_web=info");
@@ -67,9 +66,14 @@ pub async fn start() -> std::io::Result<()> {
 
     let addr = CONFIG.server_addr.clone();
 
+    // TODO: Dynamically set db store
+    let pg_store = db::PostgresStore::new(&CONFIG.database_url)
+        .await
+        .expect("Could not establish database connection.");
+
     HttpServer::new(move || {
         App::new()
-            .data(State {})
+            .data(pg_store.clone())
             .wrap(Cors::new().send_wildcard().finish())
             .wrap(Logger::default())
             .configure(routes::config)
