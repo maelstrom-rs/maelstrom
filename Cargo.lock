@@ -1096,6 +1096,7 @@ dependencies = [
  "env_logger",
  "jsonwebtoken",
  "lazy_static",
+ "ruma-identifiers",
  "serde",
  "serde_json",
  "sqlx",
@@ -1513,6 +1514,17 @@ dependencies = [
  "untrusted",
  "web-sys",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "ruma-identifiers"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07e442c700a3b33fc4dd4a1c4b463ebdd252d2c2db31b83da6bb3009307039b9"
+dependencies = [
+ "rand",
+ "serde",
+ "url",
 ]
 
 [[package]]
