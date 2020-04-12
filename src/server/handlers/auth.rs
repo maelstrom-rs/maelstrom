@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use actix_web::{http::StatusCode, web::Json, Error, HttpResponse};
 use jsonwebtoken as jwt;
-use serde_json::json;
 use ruma_identifiers::UserId;
+use serde_json::json;
 
 use crate::{
     models::auth as model,
