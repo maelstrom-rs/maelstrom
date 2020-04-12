@@ -1,5 +1,6 @@
 use dotenv::dotenv;
 
+mod db;
 mod models;
 mod server;
 
