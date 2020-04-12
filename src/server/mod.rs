@@ -70,13 +70,14 @@ pub async fn start() -> std::io::Result<()> {
     let pg_store = db::PostgresStore::new(&CONFIG.database_url)
         .await
         .expect("Could not establish database connection.");
+    let cfg = routes::config::<db::PostgresStore>;
 
     HttpServer::new(move || {
         App::new()
             .data(pg_store.clone())
             .wrap(Cors::new().send_wildcard().finish())
             .wrap(Logger::default())
-            .configure(routes::config)
+            .configure(cfg)
     })
     .bind(addr)?
     .run()
