@@ -1091,6 +1091,7 @@ dependencies = [
  "actix-cors",
  "actix-rt",
  "actix-web",
+ "async-trait",
  "dotenv",
  "env_logger",
  "jsonwebtoken",

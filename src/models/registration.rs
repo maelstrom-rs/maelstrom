@@ -25,6 +25,11 @@ pub struct RequestParams {
     pub kind: Option<Kind>,
 }
 
+#[derive(Deserialize)]
+pub struct AvailableParams {
+    pub username: String,
+}
+
 // TODO: Support `auth` and `authentication_data` fields
 #[derive(Clone, Debug, Deserialize)]
 pub struct Request {

@@ -1,5 +1,8 @@
 use super::Store;
+use async_trait::async_trait;
 use sqlx::postgres::PgPool;
+use sqlx::postgres::PgQueryAs;
+use std::error::Error;
 
 /// A Postgres Data Store
 ///
@@ -22,8 +25,18 @@ impl PostgresStore {
     }
 }
 
+#[async_trait]
 impl Store for PostgresStore {
     fn get_type(&self) -> String {
         "Initialized PostgresStore".to_string()
+    }
+
+    async fn is_username_available(&self, username: &str) -> Result<bool, Box<dyn Error>> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM accounts where localpart = $1")
+            .bind(username)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(row.0 == 0)
     }
 }
