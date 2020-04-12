@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use ruma_identifiers::UserId;
+use ruma_identifiers::{DeviceId, UserId};
 
 use crate::CONFIG;
 
@@ -32,7 +32,7 @@ pub struct LoginRequest {
     #[serde(flatten)]
     pub challenge: Challenge,
     pub identifier: UserId,
-    pub device_id: Option<String>,
+    pub device_id: Option<DeviceId>,
     pub initial_device_display_name: Option<String>,
 }
 
@@ -52,6 +52,6 @@ pub struct DiscoveryInfo {
 pub struct LoginResponse {
     pub user_id: UserId,
     pub access_token: String,
-    pub device_id: String,
+    pub device_id: DeviceId,
     pub well_known: DiscoveryInfo,
 }
