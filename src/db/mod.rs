@@ -15,5 +15,6 @@ pub trait Store: Clone + Sync + Send + Sized {
     fn get_type(&self) -> String;
 
     /// Determines if a username is available for registration.
+    /// TODO: Create more generic error responses
     async fn is_username_available(&self, username: &str) -> Result<bool, Box<dyn Error>>;
 }

@@ -1,7 +1,7 @@
 use super::handlers;
 use crate::db::Store;
 use actix_web::web::ServiceConfig;
-use actix_web::web::{delete, get, post, resource, scope};
+use actix_web::web::{get, post, resource, scope};
 
 /// Configures the routes/services for Server
 pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {

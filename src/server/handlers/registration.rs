@@ -82,9 +82,3 @@ pub async fn post_register<T: Store>(
 
     unimplemented!()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use actix_web::{http, test};
-}
