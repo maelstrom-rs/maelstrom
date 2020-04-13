@@ -66,7 +66,7 @@ Make sure you set AUTH_KEY_FILE to `path/to/ec_private.pem`
 The following are some other Rust based Home Server projects worth looking at:
 
 - [Ruma](https://github.com/ruma) The server isn't maintained, but he client libraries appear so.
-- [Condui](https://git.koesters.xyz/timo/conduit) A new Rust based Home Server under development.
+- [Conduit](https://git.koesters.xyz/timo/conduit) A new Rust based Home Server under development.
 
 ## License
 
