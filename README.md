@@ -4,7 +4,7 @@
 
 A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](rust-lang.org) designed to have a plugable storage engine, scalable, and light on resources.
 
-General discussion for development is at #maelstrom-server:matrix.org
+General discussion for development is at [#maelstrom-server:matrix.org](https://matrix.to/#/#maelstrom-server:matrix.org)
 
 ## Project Status
 
@@ -46,17 +46,27 @@ cp .env-example .env
 cargo run --release
 ```
 
+### Generating the AUTH_KEY
+
+```bash
+openssl ecparam -genkey -name secp256k1 | openssl pkcs8 -topk8 -nocrypt -out ec_private.pem
+```
+
+Make sure you set AUTH_KEY_FILE to `path/to/ec_private.pem`
+
 ## Technologies Used
 
 - [Actix-web](https://actix.rs) A high performance webserver written in Rust
 - [sqlx](https://github.com/launchbadge/sqlx) A rust version of the popular sqlx db library
+- [jwt](https://jwt.io)
+- [Ruma](https://github.com/ruma)
 
 ## Similar Projects
 
 The following are some other Rust based Home Server projects worth looking at:
 
 - [Ruma](https://github.com/ruma) The server isn't maintained, but he client libraries appear so.
-- [Matrixserver](https://git.koesters.xyz/timo/matrixserver) A new Rust based Home Server under development.
+- [Conduit](https://git.koesters.xyz/timo/conduit) A new Rust based Home Server under development.
 
 ## License
 

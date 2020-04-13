@@ -1,3 +1,4 @@
+use ruma_identifiers::DeviceId;
 use serde::Deserialize;
 
 /// The kind of account to register.
@@ -36,7 +37,7 @@ pub struct Request {
     /// ID of the client device. If this does not correspond to a known
     /// client device, a new device will be created. The server will
     /// auto-generate a device_id if this is not specified.
-    pub device_id: Option<String>,
+    pub device_id: Option<DeviceId>,
     /// If true, an `access_token` and `device_id` should not be returned
     /// from this call, therefore preventing an automatic login. Defaults
     /// to `false`.
