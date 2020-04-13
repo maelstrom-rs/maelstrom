@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use actix_web::{http::StatusCode, web::Json, Error, HttpResponse};
 use jsonwebtoken as jwt;
+use ruma_identifiers::{DeviceId, UserId};
 use serde_json::json;
 
 use crate::{
@@ -40,11 +41,11 @@ pub struct Claims<'a, 'b> {
     pub iss: &'static str,
     pub iat: i64,
     pub exp: i64,
-    pub sub: &'a model::UserId,
-    pub device_id: &'b str,
+    pub sub: &'a UserId,
+    pub device_id: &'b DeviceId,
 }
 impl<'a, 'b> Claims<'a, 'b> {
-    pub fn new(user_id: &'a model::UserId, device_id: &'b str) -> Self {
+    pub fn new(user_id: &'a UserId, device_id: &'b DeviceId) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|a| a.as_secs() as i64)
@@ -68,7 +69,7 @@ pub async fn login(req: Json<model::LoginRequest>) -> Result<HttpResponse, Error
             unimplemented!("check OTP against user db") // TODO: will finish once user db model is complete
         }
     };
-    let device_id: String = unimplemented!("find or create device id");
+    let device_id = ruma_identifiers::device_id::generate(); // TODO: implement method of finding existing device_id and verifying generated id does not collide
     let access_token = jwt::encode(
         &jwt::Header::new(jwt::Algorithm::ES256),
         &Claims::new(&user_id, &device_id),

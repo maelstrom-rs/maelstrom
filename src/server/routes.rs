@@ -1,19 +1,26 @@
 use super::handlers;
-use actix_web::web;
+use crate::db::Store;
 use actix_web::web::ServiceConfig;
+use actix_web::web::{get, post, resource, scope};
 
 /// Configures the routes/services for Server
-pub fn config(cfg: &mut ServiceConfig) {
+pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
     cfg.route(
         "/.well-known/matrix/client",
-        web::get().to(handlers::admin::get_wellknown),
+        get().to(handlers::admin::get_wellknown),
     )
     .route(
         "/_matrix/client/versions",
-        web::get().to(handlers::admin::get_versions),
+        get().to(handlers::admin::get_versions),
     )
-    .service(web::scope("/_matrix/client/r0").route(
-        "/register",
-        web::post().to(handlers::registration::post_register),
-    ));
+    .service(
+        scope("/_matrix/client/r0")
+            .service(
+                resource("/register").route(post().to(handlers::registration::post_register::<T>)),
+            )
+            .service(
+                resource("/register/available")
+                    .route(get().to(handlers::registration::get_available::<T>)),
+            ),
+    );
 }
