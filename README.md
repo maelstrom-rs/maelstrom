@@ -4,6 +4,8 @@
 
 A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](rust-lang.org) designed to have a plugable storage engine, scalable, and light on resources.
 
+General discussion for development is at [#maelstrom-server:matrix.org](https://matrix.to/#/#maelstrom-server:matrix.org)
+
 ## Project Status
 
 This is a brand new project under **daily** active development. It is not currently in usable form yet.
@@ -16,9 +18,10 @@ You can review the [Closed `matrix-spec` Issues](https://github.com/maelstrom-rs
 
 1. Performance, both in terms of scale and minimal resources.
 2. From scratch design, no legacy architecture decisions.
-3. Support for embedded or clustered deployment (configurable storage engine, e.g. Postgres, Sled, TiKV).
+3. Support for embedded (Raspi, Jetson Nano, etc.) or clustered deployment with configurable storage engine (e.g. Postgres, Sqlite, Sled, etc.).
 4. First-class e2e encryption and p2p support (as Matrix.org works towards a direction).
 5. Designed for not only chat, but decentralized IoT use cases as well.
+6. SOCKS5 Proxy support to enable .onion homeservers ([Relevant Synapse Issue](https://github.com/matrix-org/synapse/issues/7088))
 
 ## Why
 
@@ -43,17 +46,27 @@ cp .env-example .env
 cargo run --release
 ```
 
+### Generating the AUTH_KEY
+
+```bash
+openssl ecparam -genkey -name secp256k1 | openssl pkcs8 -topk8 -nocrypt -out ec_private.pem
+```
+
+Make sure you set AUTH_KEY_FILE to `path/to/ec_private.pem`
+
 ## Technologies Used
 
 - [Actix-web](https://actix.rs) A high performance webserver written in Rust
 - [sqlx](https://github.com/launchbadge/sqlx) A rust version of the popular sqlx db library
+- [jwt](https://jwt.io)
+- [Ruma](https://github.com/ruma)
 
 ## Similar Projects
 
 The following are some other Rust based Home Server projects worth looking at:
 
 - [Ruma](https://github.com/ruma) The server isn't maintained, but he client libraries appear so.
-- [Matrixserver](https://git.koesters.xyz/timo/matrixserver) A new Rust based Home Server under development.
+- [Conduit](https://git.koesters.xyz/timo/conduit) A new Rust based Home Server under development.
 
 ## License
 

@@ -1,8 +1,41 @@
-use crate::{models::registration, server::State};
+use crate::{db::Store, models::registration};
 use actix_web::{
     web::{Data, Json, Query},
     Error, HttpResponse,
 };
+use serde_json::json;
+
+/// Checks to see if a username is available, and valid, for the server.
+///
+/// The server should check to ensure that, at the time of the request, the username
+/// requested is available for use. This includes verifying that an application service
+/// has not claimed the username and that the username fits the server's desired
+/// requirements (for example, a server could dictate that it does not permit usernames
+/// with underscores).
+///
+/// Matrix clients may wish to use this API prior to attempting registration, however
+/// the clients must also be aware that using this API does not normally reserve the username.
+/// This can mean that the username becomes unavailable between checking its availability
+/// and attempting to register it.
+pub async fn get_available<T: Store>(
+    params: Query<registration::AvailableParams>,
+    storage: Data<T>,
+) -> Result<HttpResponse, Error> {
+    // TODO: !!!Validate Username:
+    // M_INVALID_USERNAME : The desired username is not a valid user name.
+    // M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
+
+    let res = storage.is_username_available(&params.username).await;
+
+    match res {
+        Ok(available) if available => Ok(HttpResponse::Ok().json(json!({"avaiable": true}))),
+        //TODO: Should Use Matrix errors, but likely they should be moved to top level mod
+        Ok(_unavailable) => Ok(HttpResponse::BadRequest().json(
+            json!({"errorcode":"M_USER_IN_USE", "error": "Desired user ID is already taken."}),
+        )),
+        _ => Ok(HttpResponse::InternalServerError().json("")),
+    }
+}
 
 /// This API endpoint uses the User-Interactive Authentication API_, except in the
 /// cases where a guest account is being registered.
@@ -39,18 +72,13 @@ use actix_web::{
 /// device_id for the account regardless of input.
 ///
 /// Any user ID returned by this API must conform to the grammar given in the Matrix specification_.
-pub async fn post_register(
+pub async fn post_register<T: Store>(
     params: Query<registration::RequestParams>,
     mut req: Json<registration::Request>,
-    state: Data<State>,
+    storage: Data<T>,
 ) -> Result<HttpResponse, Error> {
     req.kind = params.kind.clone();
+    println!("{}", storage.get_type());
 
     unimplemented!()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use actix_web::{http, test};
 }

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use actix_web::{http::StatusCode, web::Json, Error, HttpResponse};
 use jsonwebtoken as jwt;
+use ruma_identifiers::{DeviceId, UserId};
 use serde_json::json;
 
 use crate::{
@@ -40,11 +41,11 @@ pub struct Claims<'a, 'b> {
     pub iss: &'static str,
     pub iat: i64,
     pub exp: i64,
-    pub sub: &'a model::UserId,
-    pub device_id: &'b str,
+    pub sub: &'a UserId,
+    pub device_id: &'b DeviceId,
 }
 impl<'a, 'b> Claims<'a, 'b> {
-    pub fn new(user_id: &'a model::UserId, device_id: &'b str) -> Self {
+    pub fn new(user_id: &'a UserId, device_id: &'b DeviceId) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|a| a.as_secs() as i64)
