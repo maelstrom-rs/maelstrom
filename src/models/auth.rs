@@ -1,6 +1,9 @@
 use std::borrow::Cow;
+use std::convert::TryFrom;
 
 use ruma_identifiers::{DeviceId, UserId};
+
+use crate::CONFIG;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum LoginType {
@@ -24,11 +27,31 @@ pub enum ThirdParty {
     MSISDN { address: String },
 }
 
+fn uid_optional_domain<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<UserId, D::Error> {
+    let mut s: String = serde::Deserialize::deserialize(deserializer)?;
+    if !s.contains(':') {
+        s.reserve(1 + CONFIG.hostname.len());
+        s.push(':');
+        s.push_str(CONFIG.hostname.as_str());
+    }
+    UserId::try_from(s.as_str()).map_err(|_| {
+        serde::de::Error::invalid_value(
+            serde::de::Unexpected::Str(&s),
+            &"a Matrix user ID as a string",
+        )
+    })
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum UserIdentifier {
     #[serde(rename = "m.id.user")]
-    UserId { user: UserId },
+    UserId {
+        #[serde(deserialize_with = "uid_optional_domain")]
+        user: UserId,
+    },
     #[serde(rename = "m.id.thirdparty")]
     ThirdParty(ThirdParty),
     #[serde(rename = "m.id.phone")]
