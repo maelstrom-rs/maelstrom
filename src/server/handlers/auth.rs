@@ -68,7 +68,11 @@ pub async fn login(req: Json<model::LoginRequest>) -> Result<HttpResponse, Error
             unimplemented!("check OTP against user db") // TODO: will finish once user db model is complete
         }
     };
-    let device_id: String = unimplemented!("find or create device id");
+    let device_id = req
+        .device_id
+        .unwrap_or_else(ruma_identifiers::device_id::generate);
+    // TODO: implement method of finding existing device_id and verifying generated id does not collide
+    // Recommend doing an upsert which updates initial_device_display_name if it exists
     let access_token = jwt::encode(
         &jwt::Header::new(jwt::Algorithm::ES256),
         &Claims::new(&user_id, &device_id),
