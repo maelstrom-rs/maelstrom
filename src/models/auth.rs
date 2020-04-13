@@ -19,6 +19,28 @@ pub struct LoginFlow {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "medium")]
+#[serde(rename_all = "lowercase")]
+pub enum ThirdParty {
+    Email { address: String },
+    MSISDN { address: String },
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type")]
+pub enum UserIdentifier {
+    #[serde(rename = "m.id.user")]
+    UserId { user: UserId },
+    #[serde(rename = "m.id.thirdparty")]
+    ThirdParty(ThirdParty),
+    #[serde(rename = "m.id.phone")]
+    PhoneNumber {
+        country: String, // Alpha2
+        phone: String,
+    },
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum Challenge {
     #[serde(rename = "m.login.password")]
@@ -31,7 +53,7 @@ pub enum Challenge {
 pub struct LoginRequest {
     #[serde(flatten)]
     pub challenge: Challenge,
-    pub identifier: UserId,
+    pub identifier: UserIdentifier,
     pub device_id: Option<DeviceId>,
     pub initial_device_display_name: Option<String>,
 }

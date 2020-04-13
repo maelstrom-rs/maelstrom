@@ -21,6 +21,11 @@ pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
             .service(
                 resource("/register/available")
                     .route(get().to(handlers::registration::get_available::<T>)),
+            )
+            .service(
+                resource("/login")
+                    .route(get().to(handlers::auth::login_info))
+                    .route(post().to(handlers::auth::login::<T>)),
             ),
     );
 }

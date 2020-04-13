@@ -1,8 +1,13 @@
-use super::Store;
+use std::borrow::Cow;
+use std::error::Error;
+
 use async_trait::async_trait;
+use ruma_identifiers::{DeviceId, UserId};
 use sqlx::postgres::PgPool;
 use sqlx::postgres::PgQueryAs;
-use std::error::Error;
+
+use super::Store;
+use crate::models::auth::UserIdentifier;
 
 /// A Postgres Data Store
 ///
@@ -38,5 +43,30 @@ impl Store for PostgresStore {
             .await?;
 
         Ok(row.0 == 0)
+    }
+
+    async fn check_password<'a>(
+        &self,
+        user_id: &'a UserIdentifier,
+        password: &str,
+    ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>> {
+        unimplemented!()
+    }
+
+    async fn check_otp<'a>(
+        &self,
+        user_id: &'a UserIdentifier,
+        otp: &str,
+    ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>> {
+        unimplemented!()
+    }
+
+    async fn set_device<'a>(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+        display_name: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        unimplemented!()
     }
 }
