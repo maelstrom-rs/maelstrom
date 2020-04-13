@@ -2,8 +2,6 @@ use std::borrow::Cow;
 
 use ruma_identifiers::{DeviceId, UserId};
 
-use crate::CONFIG;
-
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum LoginType {
     #[serde(rename = "m.login.password")]
@@ -71,9 +69,9 @@ pub struct DiscoveryInfo {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-pub struct LoginResponse {
-    pub user_id: UserId,
+pub struct LoginResponse<'a, 'b> {
+    pub user_id: Cow<'a, UserId>,
     pub access_token: String,
-    pub device_id: DeviceId,
+    pub device_id: Cow<'b, DeviceId>,
     pub well_known: DiscoveryInfo,
 }
