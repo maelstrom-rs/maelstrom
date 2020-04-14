@@ -17,4 +17,5 @@ lazy_static = "1.4.0"
 serde = "1.0"
 serde_json = "1.0"
 sqlx = { version = "0.3", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "sqlite" ] }
+actix-ratelimit = "0.2"
 ruma-identifiers = "0.14"
