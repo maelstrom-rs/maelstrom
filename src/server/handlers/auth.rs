@@ -70,23 +70,24 @@ pub async fn login<T: Store>(
     storage: Data<T>,
 ) -> Result<HttpResponse, Error> {
     let req = req.into_inner();
-    let user_id = match &req.challenge {
+    let user_id = storage
+        .fetch_user_id(&req.identifier)
+        .await
+        .unknown()?
+        .ok_or("Authentication challenge failed.")
+        .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?;
+    match &req.challenge {
         model::Challenge::Password { password } => {
-            match storage
-                .check_password(&req.identifier, password)
-                .await
-                .unknown()?
-            {
-                Some(id) => id.into_owned(),
-                None => Err("Authentication challenge failed.")
-                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?,
+            let pwhash = storage.fetch_password_hash(&user_id).await.unknown()?;
+            if !pwhash.matches(&password) {
+                Err("Authentication challenge failed.")
+                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
             }
         }
         model::Challenge::Token { token } => {
-            match storage.check_otp(&req.identifier, token).await.unknown()? {
-                Some(id) => id.into_owned(),
-                None => Err("Authentication challenge failed.")
-                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?,
+            if !storage.check_otp(&user_id, token).await.unknown()? {
+                Err("Authentication challenge failed.")
+                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
             }
         }
     };
@@ -105,9 +106,9 @@ pub async fn login<T: Store>(
     )
     .with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN)?;
     let res = HttpResponse::Ok().json(model::LoginResponse {
-        user_id: Cow::Borrowed(&user_id),
-        access_token,
-        device_id: Cow::Borrowed(&device_id),
+        user_id: &user_id,
+        access_token: &access_token,
+        device_id: &device_id,
         well_known: model::DiscoveryInfo {
             homeserver: model::HomeserverInfo {
                 base_url: Cow::Borrowed(&CONFIG.base_url),

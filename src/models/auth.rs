@@ -91,10 +91,10 @@ pub struct DiscoveryInfo {
     // TODO: identity server??
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-pub struct LoginResponse<'a, 'b> {
-    pub user_id: Cow<'a, UserId>,
-    pub access_token: String,
-    pub device_id: Cow<'b, DeviceId>,
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LoginResponse<'a> {
+    pub user_id: &'a UserId,
+    pub access_token: &'a str,
+    pub device_id: &'a DeviceId,
     pub well_known: DiscoveryInfo,
 }

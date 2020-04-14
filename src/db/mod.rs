@@ -23,17 +23,14 @@ pub trait Store: Clone + Sync + Send + Sized {
     /// TODO: Create more generic error responses
     async fn is_username_available(&self, username: &str) -> Result<bool, Box<dyn Error>>;
 
-    async fn check_password<'a>(
+    async fn fetch_user_id<'a>(
         &self,
         user_id: &'a UserIdentifier,
-        password: &str,
     ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>>;
 
-    async fn check_otp<'a>(
-        &self,
-        user_id: &'a UserIdentifier,
-        otp: &str,
-    ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>>;
+    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<PWHash, Box<dyn Error>>;
+
+    async fn check_otp(&self, user_id: &UserId, otp: &str) -> Result<bool, Box<dyn Error>>;
 
     async fn set_device<'a>(
         &self,
@@ -41,4 +38,12 @@ pub trait Store: Clone + Sync + Send + Sized {
         device_id: &DeviceId,
         display_name: Option<&str>,
     ) -> Result<(), Box<dyn Error>>;
+}
+
+// TODO
+pub enum PWHash {}
+impl PWHash {
+    pub fn matches(&self, pw: &str) -> bool {
+        unimplemented!()
+    }
 }

@@ -45,19 +45,18 @@ impl Store for PostgresStore {
         Ok(row.0 == 0)
     }
 
-    async fn check_password<'a>(
+    async fn fetch_user_id<'a>(
         &self,
         user_id: &'a UserIdentifier,
-        password: &str,
     ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>> {
         unimplemented!()
     }
 
-    async fn check_otp<'a>(
-        &self,
-        user_id: &'a UserIdentifier,
-        otp: &str,
-    ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>> {
+    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<super::PWHash, Box<dyn Error>> {
+        unimplemented!()
+    }
+
+    async fn check_otp(&self, user_id: &UserId, otp: &str) -> Result<bool, Box<dyn Error>> {
         unimplemented!()
     }
 
