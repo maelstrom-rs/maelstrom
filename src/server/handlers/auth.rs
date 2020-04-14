@@ -1,11 +1,16 @@
 use std::borrow::Cow;
 
-use actix_web::{http::StatusCode, web::Json, Error, HttpResponse};
+use actix_web::{
+    http::StatusCode,
+    web::{Data, Json},
+    Error, HttpResponse,
+};
 use jsonwebtoken as jwt;
 use ruma_identifiers::{DeviceId, UserId};
 use serde_json::json;
 
 use crate::{
+    db::Store,
     models::auth as model,
     server::error::{ErrorCode, ResultExt as _},
     CONFIG,
@@ -60,30 +65,56 @@ impl<'a, 'b> Claims<'a, 'b> {
     }
 }
 
-pub async fn login(req: Json<model::LoginRequest>) -> Result<HttpResponse, Error> {
-    let user_id = match &req.challenge {
+pub async fn login<T: Store>(
+    req: Json<model::LoginRequest>,
+    storage: Data<T>,
+) -> Result<HttpResponse, Error> {
+    let req = req.into_inner();
+    let user_id = storage
+        .fetch_user_id(&req.identifier)
+        .await
+        .unknown()?
+        .ok_or("Authentication challenge failed.")
+        .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?;
+    match &req.challenge {
         model::Challenge::Password { password } => {
-            unimplemented!("check password against user db") // TODO: will finish once user db model is complete
+            let pwhash = storage.fetch_password_hash(&user_id).await.unknown()?;
+            if !pwhash.matches(&password) {
+                Err("Authentication challenge failed.")
+                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
+            }
         }
         model::Challenge::Token { token } => {
-            unimplemented!("check OTP against user db") // TODO: will finish once user db model is complete
+            if !storage.check_otp_exists(&user_id, token).await.unknown()? {
+                Err("Authentication challenge failed.")
+                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
+            }
         }
     };
-    let device_id = ruma_identifiers::device_id::generate(); // TODO: implement method of finding existing device_id and verifying generated id does not collide
+    let device_id = req
+        .device_id
+        .unwrap_or_else(ruma_identifiers::device_id::generate);
+    let update_dev_id_fut = storage.set_device(
+        &user_id,
+        &device_id,
+        req.initial_device_display_name.as_ref().map(String::as_str),
+    );
     let access_token = jwt::encode(
         &jwt::Header::new(jwt::Algorithm::ES256),
         &Claims::new(&user_id, &device_id),
         &CONFIG.auth_key,
     )
     .with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN)?;
-    Ok(HttpResponse::Ok().json(model::LoginResponse {
-        user_id,
-        access_token,
-        device_id,
+    let res = HttpResponse::Ok().json(model::LoginResponse {
+        user_id: &user_id,
+        access_token: &access_token,
+        device_id: &device_id,
         well_known: model::DiscoveryInfo {
             homeserver: model::HomeserverInfo {
                 base_url: Cow::Borrowed(&CONFIG.base_url),
             },
         },
-    }))
+    });
+    update_dev_id_fut.await.unknown()?;
+    Ok(res)
 }
