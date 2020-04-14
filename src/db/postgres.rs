@@ -7,7 +7,7 @@ use sqlx::postgres::PgPool;
 use sqlx::postgres::PgQueryAs;
 
 use super::Store;
-use crate::models::auth::UserIdentifier;
+use crate::models::auth::{PWHash, UserIdentifier};
 
 /// A Postgres Data Store
 ///
@@ -36,13 +36,13 @@ impl Store for PostgresStore {
         "Initialized PostgresStore".to_string()
     }
 
-    async fn is_username_available(&self, username: &str) -> Result<bool, Box<dyn Error>> {
+    async fn check_username_exists(&self, username: &str) -> Result<bool, Box<dyn Error>> {
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM accounts where localpart = $1")
             .bind(username)
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(row.0 == 0)
+        Ok(row.0 > 0)
     }
 
     async fn fetch_user_id<'a>(
@@ -52,11 +52,11 @@ impl Store for PostgresStore {
         unimplemented!()
     }
 
-    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<super::PWHash, Box<dyn Error>> {
+    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<PWHash, Box<dyn Error>> {
         unimplemented!()
     }
 
-    async fn check_otp(&self, user_id: &UserId, otp: &str) -> Result<bool, Box<dyn Error>> {
+    async fn check_otp_exists(&self, user_id: &UserId, otp: &str) -> Result<bool, Box<dyn Error>> {
         unimplemented!()
     }
 

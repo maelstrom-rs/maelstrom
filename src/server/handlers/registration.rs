@@ -25,10 +25,10 @@ pub async fn get_available<T: Store>(
     // M_INVALID_USERNAME : The desired username is not a valid user name.
     // M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
 
-    let res = storage.is_username_available(&params.username).await;
+    let res = storage.check_username_exists(&params.username).await;
 
     match res {
-        Ok(available) if available => Ok(HttpResponse::Ok().json(json!({"avaiable": true}))),
+        Ok(exists) if !exists => Ok(HttpResponse::Ok().json(json!({"avaiable": true}))),
         //TODO: Should Use Matrix errors, but likely they should be moved to top level mod
         Ok(_unavailable) => Ok(HttpResponse::BadRequest().json(
             json!({"errorcode":"M_USER_IN_USE", "error": "Desired user ID is already taken."}),

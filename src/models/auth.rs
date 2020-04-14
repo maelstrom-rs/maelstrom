@@ -98,3 +98,11 @@ pub struct LoginResponse<'a> {
     pub device_id: &'a DeviceId,
     pub well_known: DiscoveryInfo,
 }
+
+// TODO
+pub enum PWHash {}
+impl PWHash {
+    pub fn matches(&self, pw: &str) -> bool {
+        unimplemented!()
+    }
+}

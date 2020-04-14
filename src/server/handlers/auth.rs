@@ -85,7 +85,7 @@ pub async fn login<T: Store>(
             }
         }
         model::Challenge::Token { token } => {
-            if !storage.check_otp(&user_id, token).await.unknown()? {
+            if !storage.check_otp_exists(&user_id, token).await.unknown()? {
                 Err("Authentication challenge failed.")
                     .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
             }
