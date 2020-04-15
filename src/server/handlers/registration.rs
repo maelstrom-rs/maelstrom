@@ -84,7 +84,7 @@ pub async fn post_register<T: Store>(
     params: Query<registration::RequestParams>,
     mut req: Json<registration::Request>,
     storage: Data<T>,
-) -> HttpResponse {
+) -> Result<HttpResponse, MatrixError> {
     req.kind = params.kind.clone();
     println!("{}", storage.get_type());
 
