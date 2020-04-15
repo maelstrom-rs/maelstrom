@@ -19,7 +19,7 @@ impl From<sqlx::Error> for Error {
             sqlx::Error::RowNotFound => ErrorCode::RecordNotFound,
             //TODO: break out and match against database errors
             sqlx::Error::Database(_) | sqlx::Error::ColumnNotFound(_) => ErrorCode::InvalidSyntax,
-            _ => ErrorCode::Unknown,
+            _ => ErrorCode::Unknown("Unknown error occurred.".to_string()),
         };
 
         Error { code }

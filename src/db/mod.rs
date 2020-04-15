@@ -90,5 +90,5 @@ pub enum ErrorCode {
     /// The query syntax was invalid.
     InvalidSyntax,
     /// Catch all for any error that can be translated to one of the existing errors.
-    Unknown,
+    Unknown(String),
 }

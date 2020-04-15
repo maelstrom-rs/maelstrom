@@ -1,12 +1,12 @@
 use actix_web::{
-    http::StatusCode,
+    http,
     web::{Data, Json, Query},
     HttpResponse,
 };
-use ruma_identifiers::UserId;
+
 use serde_json::json;
 
-use crate::server::error::{ErrorCode, MatrixError};
+use crate::server::error::{ErrorCode, MatrixError, ResultExt};
 use crate::{db::Store, models::registration};
 
 /// Checks to see if a username is available, and valid, for the server.
@@ -29,18 +29,19 @@ pub async fn get_available<T: Store>(
     // M_INVALID_USERNAME : The desired username is not a valid user name.
     // TODO: M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
 
-    let res = storage.check_username_exists(&params.username).await;
-    match res {
-        // username already exists
-        Ok(exists) if exists => Err(MatrixError::new(
-            StatusCode::BAD_REQUEST,
+    let exists = storage
+        .check_username_exists(&params.username)
+        .await
+        .unknown()?;
+
+    if exists {
+        Err(MatrixError::new(
+            http::StatusCode::BAD_REQUEST,
             ErrorCode::USER_IN_USE,
             "Desired user ID is already taken.",
-        ))?,
-        // username is available
-        Ok(_available) => Ok(HttpResponse::Ok().json(json!({"avaiable": true}))),
-        // data store returned some error
-        _ => Err(MatrixError::internal_err()),
+        ))?
+    } else {
+        Ok(HttpResponse::Ok().json(json!({"avaiable": true})))
     }
 }
 
@@ -114,5 +115,25 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
 
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_available_username_available() {
+        let mut test_db = MockStore::new();
+        test_db.check_username_exists_resp = Some(Ok(false));
+
+        let mut app = test::init_service(
+            App::new()
+                .data(test_db)
+                .route("/", web::get().to(get_available::<MockStore>)),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/?username=taken_nottaken")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+
+        assert!(resp.status().is_success());
     }
 }
