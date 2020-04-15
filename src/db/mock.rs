@@ -7,10 +7,16 @@ use super::{Error, Store};
 use crate::models::auth::{PWHash, UserIdentifier};
 
 /// A Mock Storage engine used for Testing.
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MockStore {
     pub check_username_exists_resp: Option<Result<bool, Error>>,
+}
+
+impl MockStore {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Default::default()
+    }
 }
 
 #[async_trait]
