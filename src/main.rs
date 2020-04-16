@@ -1,4 +1,4 @@
-use dotenv::dotenv;
+use dotenv;
 
 mod db;
 mod models;
@@ -10,10 +10,21 @@ lazy_static::lazy_static! {
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-    dotenv().ok();
+    init_config();
 
-    &*CONFIG; // eagerly load config
     let _server = server::start().await;
 
     Ok(())
+}
+
+/// Initializes the global config from env vars or `.env` file
+pub fn init_config() {
+    dotenv::dotenv().ok();
+    &*CONFIG; // eagerly load config
+}
+
+/// Initialized the global config from an `.env` file name
+pub fn init_config_from_file(file_name: &str) {
+    dotenv::from_filename(file_name).ok();
+    &*CONFIG; // eagerly load config
 }

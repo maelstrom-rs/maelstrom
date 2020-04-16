@@ -3,7 +3,6 @@ use actix_web::{
     web::{Data, Json, Query},
     HttpResponse,
 };
-
 use serde_json::json;
 
 use crate::server::error::{ErrorCode, MatrixError, ResultExt};
@@ -28,6 +27,14 @@ pub async fn get_available<T: Store>(
     // TODO: !!!Validate Username:
     // M_INVALID_USERNAME : The desired username is not a valid user name.
     // TODO: M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
+
+    if !registration::is_username_valid(&params.username) {
+        Err(MatrixError::new(
+            http::StatusCode::BAD_REQUEST,
+            ErrorCode::INVALID_USERNAME,
+            "The desired username is not a valid user name.",
+        ))?
+    }
 
     let exists = storage
         .check_username_exists(&params.username)
@@ -99,6 +106,8 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_get_available_username_taken() {
+        crate::init_config_from_file(".env-test");
+
         let mut test_db = MockStore::new();
         test_db.check_username_exists_resp = Some(Ok(true));
 
@@ -119,6 +128,8 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_get_available_username_available() {
+        crate::init_config_from_file(".env-test");
+
         let mut test_db = MockStore::new();
         test_db.check_username_exists_resp = Some(Ok(false));
 
@@ -135,5 +146,27 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
 
         assert!(resp.status().is_success());
+    }
+
+    #[actix_rt::test]
+    async fn test_get_available_username_invalid() {
+        crate::init_config_from_file(".env-test");
+
+        let mut test_db = MockStore::new();
+        test_db.check_username_exists_resp = Some(Ok(true));
+
+        let mut app = test::init_service(
+            App::new()
+                .data(test_db)
+                .route("/", web::get().to(get_available::<MockStore>)),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/?username=t@ken")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
     }
 }

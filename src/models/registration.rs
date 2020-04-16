@@ -1,5 +1,9 @@
-use ruma_identifiers::DeviceId;
+use std::convert::TryInto;
+
+use ruma_identifiers::{DeviceId, UserId};
 use serde::Deserialize;
+
+use crate::CONFIG;
 
 /// The kind of account to register.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -55,9 +59,32 @@ pub struct Request {
     pub username: Option<String>,
 }
 
+/// Checks to see if the username is valid and does NOT
+/// contain any non-allowed characters
+pub fn is_username_valid(username: &str) -> bool {
+    let res: Result<UserId, _> = format!("@{}:{}", username, CONFIG.hostname)[..].try_into();
+    dbg!(&res);
+    // Shouldn't be able to register new names with historical characters
+    res.is_ok() && !res.unwrap().is_historical()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_check_username_valid_good() {
+        crate::init_config_from_file(".env-test");
+        let good_username = "good_user";
+        assert!(is_username_valid(good_username));
+    }
+
+    #[test]
+    fn test_check_username_valid_bad() {
+        crate::init_config_from_file(".env-test");
+        let bad_username = "b@dn!ame$";
+        assert_ne!(true, is_username_valid(bad_username));
+    }
 
     #[test]
     fn test_kind_from_str_guest() {
