@@ -1,14 +1,30 @@
 use std::borrow::Cow;
-use std::error::Error;
 
 use async_trait::async_trait;
 use ruma_identifiers::{DeviceId, UserId};
 use sqlx::postgres::PgPool;
 use sqlx::postgres::PgQueryAs;
 
-use super::Store;
+use super::{Error, ErrorCode, Store};
 use crate::models::auth::{PWHash, UserIdentifier};
 
+// Convert from Sqlx errors to Store errors
+impl From<sqlx::Error> for Error {
+    #[inline]
+    fn from(err: sqlx::Error) -> Self {
+        let code = match err {
+            sqlx::Error::Io(_) | sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut(_) => {
+                ErrorCode::ConnectionFailed
+            }
+            sqlx::Error::RowNotFound => ErrorCode::RecordNotFound,
+            //TODO: break out and match against database errors
+            sqlx::Error::Database(_) | sqlx::Error::ColumnNotFound(_) => ErrorCode::InvalidSyntax,
+            _ => ErrorCode::Unknown("Unknown error occurred.".to_string()),
+        };
+
+        Error { code }
+    }
+}
 /// A Postgres Data Store
 ///
 /// This implements the `Store` trait for Postgres.
@@ -33,10 +49,10 @@ impl PostgresStore {
 #[async_trait]
 impl Store for PostgresStore {
     fn get_type(&self) -> String {
-        "Initialized PostgresStore".to_string()
+        "PostgresStore".to_string()
     }
 
-    async fn check_username_exists(&self, username: &str) -> Result<bool, Box<dyn Error>> {
+    async fn check_username_exists(&self, username: &str) -> Result<bool, Error> {
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM accounts where localpart = $1")
             .bind(username)
             .fetch_one(&self.pool)
@@ -48,15 +64,15 @@ impl Store for PostgresStore {
     async fn fetch_user_id<'a>(
         &self,
         user_id: &'a UserIdentifier,
-    ) -> Result<Option<Cow<'a, UserId>>, Box<dyn Error>> {
+    ) -> Result<Option<Cow<'a, UserId>>, Error> {
         unimplemented!()
     }
 
-    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<PWHash, Box<dyn Error>> {
+    async fn fetch_password_hash(&self, user_id: &UserId) -> Result<PWHash, Error> {
         unimplemented!()
     }
 
-    async fn check_otp_exists(&self, user_id: &UserId, otp: &str) -> Result<bool, Box<dyn Error>> {
+    async fn check_otp_exists(&self, user_id: &UserId, otp: &str) -> Result<bool, Error> {
         unimplemented!()
     }
 
@@ -65,7 +81,7 @@ impl Store for PostgresStore {
         user_id: &UserId,
         device_id: &DeviceId,
         display_name: Option<&str>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Error> {
         unimplemented!()
     }
 }
