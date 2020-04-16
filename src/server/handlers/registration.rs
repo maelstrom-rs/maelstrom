@@ -153,7 +153,7 @@ mod tests {
         crate::init_config_from_file(".env-test");
 
         let mut test_db = MockStore::new();
-        test_db.check_username_exists_resp = Some(Ok(true));
+        test_db.check_username_exists_resp = Some(Ok(false));
 
         let mut app = test::init_service(
             App::new()

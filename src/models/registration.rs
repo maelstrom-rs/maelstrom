@@ -62,8 +62,10 @@ pub struct Request {
 /// Checks to see if the username is valid and does NOT
 /// contain any non-allowed characters
 pub fn is_username_valid(username: &str) -> bool {
+    if username.len() == 0 {
+        return false;
+    }
     let res: Result<UserId, _> = format!("@{}:{}", username, CONFIG.hostname)[..].try_into();
-    dbg!(&res);
     // Shouldn't be able to register new names with historical characters
     res.is_ok() && !res.unwrap().is_historical()
 }
@@ -83,6 +85,13 @@ mod tests {
     fn test_check_username_valid_bad() {
         crate::init_config_from_file(".env-test");
         let bad_username = "b@dn!ame$";
+        assert_ne!(true, is_username_valid(bad_username));
+    }
+
+    #[test]
+    fn test_check_username_valid_empty() {
+        crate::init_config_from_file(".env-test");
+        let bad_username = "";
         assert_ne!(true, is_username_valid(bad_username));
     }
 
