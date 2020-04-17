@@ -15,7 +15,7 @@ dotenv = "0.15"
 env_logger = "0.7"
 jsonwebtoken = "7.1.0"
 lazy_static = "1.4.0"
-ruma-identifiers = "0.14"
+ruma-identifiers = {version = "0.15", features = [ "rand", "serde" ] }
 serde = "1.0"
 serde_json = "1.0"
 sqlx = { version = "0.3", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "sqlite" ] }
