@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS devices (
   session_id UUID NOT NULL,
   -- The device identifier. This only needs to uniquely identify a device for a given user, not globally.
   -- access_tokens will be clobbered based on the device ID for a user.
-  device_id UUID NOT NULL,
+  device_id TEXT NOT NULL,
   -- The Matrix user ID localpart for this device. This is preferable to storing the full user_id
   -- as it is smaller, makes it clearer that we only manage devices for our own users, and may make
   -- migration to different domain names easier.
