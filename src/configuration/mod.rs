@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
@@ -10,7 +10,6 @@ use jsonwebtoken::EncodingKey;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
-use url::Host;
 use url::Url;
 
 #[derive(Debug)]
@@ -92,7 +91,7 @@ impl EnvironmentConfig {
                 Err(e) => {
                     error!("Unable to parse server_addr to url. Reason is {:?}", e);
                     exit(1)
-                },
+                }
             },
             Err(_) => None,
         };
@@ -102,7 +101,7 @@ impl EnvironmentConfig {
                 Err(e) => {
                     error!("Unable to parse database_addr to url. Reason is {:?}", e);
                     exit(1)
-                },
+                }
             },
             Err(_) => None,
         };
@@ -114,9 +113,12 @@ impl EnvironmentConfig {
             Ok(v) => match v.parse() {
                 Ok(v) => Some(v),
                 Err(e) => {
-                    error!("Unable to parse session_expiration to u64. Reason is {:?}", e);
+                    error!(
+                        "Unable to parse session_expiration to u64. Reason is {:?}",
+                        e
+                    );
                     exit(1)
-                },
+                }
             },
             Err(_) => None,
         };
@@ -144,10 +146,6 @@ impl YamlConfig {
             session_expiration: Some(3000),
         };
         yaml
-    }
-
-    fn load() -> Self {
-        unimplemented!()
     }
 
     fn save(&self, path: &PathBuf) -> Result<(), Error> {
@@ -277,7 +275,10 @@ impl ServerConfig {
                 Ok(mut v) => {
                     let mut key = match &v.metadata() {
                         Ok(v) => Vec::<u8>::with_capacity(v.len() as usize),
-                        Err(e) => unimplemented!(),
+                        Err(e) => {
+                            error!("Unable to read keyfile metadata. Reason is {:?}", e);
+                            exit(1)
+                        },
                     };
                     match v.read_to_end(&mut key) {
                         Ok(_) => match EncodingKey::from_ec_pem(&key) {
