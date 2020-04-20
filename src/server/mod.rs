@@ -84,7 +84,7 @@ impl Config {
             hostname,
             jwt_header: jwt::Header::new(jwt::Algorithm::ES256),
             auth_token_expiration: std::env::var("AUTH_TOKEN_EXPIRATION")
-                .expect("SESSION_EXPIRATION env var missing.")
+                .expect("AUTH_TOKEN_EXPIRATION env var missing.")
                 .parse()
                 .expect("Unable to parse SESSION_EXPIRATION as i64."),
             session_expiration: std::env::var("SESSION_EXPIRATION")
