@@ -50,7 +50,7 @@ pub async fn login<T: Store>(
         .fetch_user_id(&req.identifier)
         .await
         .unknown()?
-        .ok_or("Authentication challenge failed.")
+        .ok_or("Authentication challenge failed.") // User not found should look identical to auth fail.
         .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?;
     let device_id = req
         .device_id
