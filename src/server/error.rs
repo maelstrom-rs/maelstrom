@@ -34,7 +34,11 @@ impl From<MatrixError> for Error {
 pub trait ResultExt<T>: Sized {
     fn with_codes(self, status: StatusCode, code: ErrorCode) -> Result<T, MatrixError>;
     fn unknown(self) -> Result<T, MatrixError> {
-        self.with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN)
+        #[cfg(debug_assertions)] // don't leak ISE info in release mode
+        let res = self.with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN);
+        #[cfg(not(debug_assertions))]
+        let res = self.map_err(|_| MatrixError::internal_err());
+        res
     }
 }
 

@@ -41,30 +41,6 @@ pub async fn login_info() -> Result<HttpResponse, Error> {
         .body(&*LOGIN_INFO))
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct Claims<'a, 'b> {
-    pub iss: &'static str,
-    pub iat: i64,
-    pub exp: i64,
-    pub sub: &'a UserId,
-    pub device_id: &'b DeviceId,
-}
-impl<'a, 'b> Claims<'a, 'b> {
-    pub fn new(user_id: &'a UserId, device_id: &'b DeviceId) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|a| a.as_secs() as i64)
-            .unwrap_or_else(|a| -(a.duration().as_secs() as i64));
-        Self {
-            iss: &CONFIG.hostname,
-            iat: now,
-            exp: now + CONFIG.session_expiration,
-            sub: user_id,
-            device_id,
-        }
-    }
-}
-
 pub async fn login<T: Store>(
     req: Json<model::LoginRequest>,
     storage: Data<T>,
@@ -76,35 +52,26 @@ pub async fn login<T: Store>(
         .unknown()?
         .ok_or("Authentication challenge failed.")
         .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?;
-    match &req.challenge {
-        model::Challenge::Password { password } => {
-            let pwhash = storage.fetch_password_hash(&user_id).await.unknown()?;
-            if !pwhash.matches(&password) {
-                Err("Authentication challenge failed.")
-                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
-            }
-        }
-        model::Challenge::Token { token } => {
-            if !storage.check_otp_exists(&user_id, token).await.unknown()? {
-                Err("Authentication challenge failed.")
-                    .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
-            }
-        }
-    };
     let device_id = req
         .device_id
         .unwrap_or_else(ruma_identifiers::device_id::generate);
+    if !req
+        .challenge
+        .passes(storage.as_ref(), None, &user_id, &device_id)
+        .await
+        .unknown()?
+    {
+        Err("Authentication challenge failed.")
+            .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
+    };
     let update_dev_id_fut = storage.set_device(
         &user_id,
         &device_id,
         req.initial_device_display_name.as_ref().map(String::as_str),
     );
-    let access_token = jwt::encode(
-        &jwt::Header::new(jwt::Algorithm::ES256),
-        &Claims::new(&user_id, &device_id),
-        &CONFIG.auth_key,
-    )
-    .with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN)?;
+    let access_token = model::Claims::auth(&user_id, &device_id)
+        .as_jwt()
+        .with_codes(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::UNKNOWN)?;
     let res = HttpResponse::Ok().json(model::LoginResponse {
         user_id: &user_id,
         access_token: &access_token,

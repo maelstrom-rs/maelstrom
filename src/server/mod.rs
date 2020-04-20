@@ -22,9 +22,15 @@ pub struct Config {
     pub base_url: String,
     /// Database URL (will distinquish between postgres, sqlite, sled)
     pub database_url: String,
-    /// PEM encoded ES256 key for creating auth tokens
+    /// ES256 private key for creating auth and session tokens
     pub auth_key: jwt::EncodingKey,
+    /// ES256 public key for verifying auth and session tokens (derived from private key)
+    pub auth_key_pub: jwt::DecodingKey<'static>,
+    /// Verification rules for auth and session tokens
+    pub jwt_validation: jwt::Validation,
     /// Duration in seconds that an auth token is valid for
+    pub auth_token_expiration: i64,
+    /// Duration in seconds that a session token is valid for
     pub session_expiration: i64,
 }
 
@@ -33,31 +39,47 @@ impl Config {
     /// to load from `env` vars.  Panics if
     /// any are missing.
     pub fn new_from_env() -> Self {
+        let (auth_key, auth_key_pub) = {
+            use std::io::Read;
+            let var = std::env::var("AUTH_KEY_FILE").expect("AUTH_KEY_FILE env var missing.");
+            let path = std::path::Path::new(&var);
+            let mut key_data = Vec::with_capacity(
+                path.metadata()
+                    .expect("Error fetcing metadata for AUTH_KEY_FILE.")
+                    .len() as usize,
+            );
+            std::fs::File::open(path)
+                .expect("Error opening AUTH_KEY_FILE.")
+                .read_to_end(&mut key_data)
+                .expect("Error reading AUTH_KEY_FILE.");
+            crate::util::crypto::parse_keypair(&key_data)
+                .expect("Error decoding AUTH_KEY_FILE contents as a PEM encoded ECDSA private key.")
+        };
+        let hostname = std::env::var("HOSTNAME").expect("HOSTNAME env var missing.");
         Self {
             server_addr: std::env::var("SERVER_ADDR").expect("SERVER_ADDR env var missing."),
-            hostname: std::env::var("HOSTNAME").expect("HOSTNAME env var missing."),
             base_url: std::env::var("BASE_URL").expect("BASE_URL env var missing."),
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL env var missing."),
-            auth_key: {
-                use std::io::Read;
-                let var = std::env::var("AUTH_KEY_FILE").expect("AUTH_KEY_FILE env var missing.");
-                let path = std::path::Path::new(&var);
-                let mut key_data = Vec::with_capacity(
-                    path.metadata()
-                        .expect("Error fetcing metadata for AUTH_KEY_FILE.")
-                        .len() as usize,
-                );
-                std::fs::File::open(path)
-                    .expect("Error opening AUTH_KEY_FILE.")
-                    .read_to_end(&mut key_data)
-                    .expect("Error reading AUTH_KEY_FILE.");
-                jwt::EncodingKey::from_ec_pem(&key_data)
-                    .expect("Error decoding AUTH_KEY_FILE contents as a PEM encoded ECDSA key.")
+            auth_key,
+            auth_key_pub,
+            jwt_validation: jwt::Validation {
+                algorithms: vec![jwt::Algorithm::ES256],
+                aud: None,
+                iss: Some(hostname.clone()),
+                leeway: 5,
+                sub: None,
+                validate_exp: true,
+                validate_nbf: false,
             },
+            auth_token_expiration: std::env::var("AUTH_TOKEN_EXPIRATION")
+                .expect("SESSION_EXPIRATION env var missing.")
+                .parse()
+                .expect("Unable to parse SESSION_EXPIRATION as i64."),
             session_expiration: std::env::var("SESSION_EXPIRATION")
                 .expect("SESSION_EXPIRATION env var missing.")
                 .parse()
                 .expect("Unable to parse SESSION_EXPIRATION as i64."),
+            hostname,
         }
     }
 }

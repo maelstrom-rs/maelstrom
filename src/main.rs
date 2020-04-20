@@ -3,6 +3,7 @@ use dotenv;
 mod db;
 mod models;
 mod server;
+mod util;
 
 lazy_static::lazy_static! {
     pub static ref CONFIG: server::Config = server::Config::new_from_env();

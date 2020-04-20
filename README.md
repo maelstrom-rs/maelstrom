@@ -49,7 +49,7 @@ cargo run --release
 ### Generating the AUTH_KEY
 
 ```bash
-openssl ecparam -genkey -name secp256k1 | openssl pkcs8 -topk8 -nocrypt -out ec_private.pem
+openssl ecparam -genkey -name prime256v1 | openssl pkcs8 -topk8 -nocrypt -out ec_private.pem
 ```
 
 Make sure you set AUTH_KEY_FILE to `path/to/ec_private.pem`
