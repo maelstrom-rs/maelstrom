@@ -1,10 +1,10 @@
-use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::borrow::{Borrow, Cow};
 use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 
 use jsonwebtoken as jwt;
+use linear_map::{set::LinearSet, LinearMap};
 use ruma_identifiers::{DeviceId, UserId};
 
 use crate::db::{Error as StorageError, Store};
@@ -45,7 +45,7 @@ pub struct Claims<'a> {
     pub sub: &'a UserId,
     pub device_id: &'a DeviceId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub incomplete: Option<&'a [LoginType]>,
+    pub complete: Option<&'a [LoginType]>,
 }
 impl<'a> Claims<'a> {
     pub fn auth(user_id: &'a UserId, device_id: &'a DeviceId) -> Self {
@@ -61,11 +61,15 @@ impl<'a> Claims<'a> {
             jti: Some(rand::random()),
             sub: user_id,
             device_id,
-            incomplete: None,
+            complete: None,
         }
     }
 
-    pub fn session(user_id: &'a UserId, device_id: &'a DeviceId, flows: &'a [LoginType]) -> Self {
+    pub fn session(
+        user_id: &'a UserId,
+        device_id: &'a DeviceId,
+        complete: &'a [LoginType],
+    ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|a| a.as_secs() as i64)
@@ -78,24 +82,20 @@ impl<'a> Claims<'a> {
             jti: None,
             sub: user_id,
             device_id,
-            incomplete: Some(flows),
+            complete: Some(complete),
         }
     }
 
     pub fn as_jwt(&self) -> Result<String, jwt::errors::Error> {
-        jwt::encode(
-            &jwt::Header::new(jwt::Algorithm::ES256),
-            &self,
-            &CONFIG.auth_key,
-        )
+        jwt::encode(&CONFIG.jwt_header, &self, &CONFIG.auth_key)
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct SessionToken {
     pub sub: UserId,
     pub device_id: DeviceId,
-    pub incomplete: VecDeque<LoginType>,
+    pub complete: Vec<LoginType>,
 }
 impl FromStr for SessionToken {
     type Err = jwt::errors::Error;
@@ -110,23 +110,19 @@ impl SessionToken {
         &mut self,
         store: &T,
         challenge: &Challenge,
-    ) -> Result<(), Error> {
-        if challenge
-            .passes(
-                store,
-                self.incomplete.get(0).copied(),
-                &self.sub,
-                &self.device_id,
-            )
-            .await?
-        {
-            self.incomplete.pop_front();
+    ) -> Result<bool, Error> {
+        if let Some(login_type) = challenge.passes(store, &self.sub, &self.device_id).await? {
+            self.complete.push(login_type);
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 
-    pub fn complete(&self) -> bool {
-        self.incomplete.is_empty()
+    pub fn is_complete(&self) -> bool {
+        CONFIG
+            .interactive_auth_flows
+            .contains::<[LoginType]>(&self.complete)
     }
 }
 
@@ -145,6 +141,16 @@ impl FromStr for AuthToken {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct InteractiveLoginFlow {
+    pub stages: Vec<LoginType>,
+}
+impl Borrow<[LoginType]> for InteractiveLoginFlow {
+    fn borrow(&self) -> &[LoginType] {
+        self.stages.as_slice()
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct InteractiveAuth {
     #[serde(flatten)]
@@ -152,8 +158,63 @@ pub struct InteractiveAuth {
     #[serde(deserialize_with = "crate::util::serde::deser_parse")]
     pub session: SessionToken,
 }
+impl InteractiveAuth {
+    pub async fn handle<T: Store>(mut self, store: &T) -> Result<(), actix_web::Error> {
+        use crate::server::error::{ErrorCode, ResultExt};
+        use actix_web::{http::StatusCode, HttpResponse};
 
-#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+        #[derive(serde::Serialize)]
+        struct IncompleteAuthResponse<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            errcode: Option<ErrorCode>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            error: Option<&'static str>,
+            completed: &'a [LoginType],
+            flows: &'a LinearSet<InteractiveLoginFlow>,
+            params: &'a LinearMap<LoginType, serde_json::Value>,
+            session: &'a str,
+        }
+
+        let success = self
+            .session
+            .update(store, &self.challenge)
+            .await
+            .unknown()?;
+        if self.session.is_complete() {
+            Ok(())
+        } else {
+            Err(HttpResponse::build(StatusCode::UNAUTHORIZED)
+                .json(&IncompleteAuthResponse {
+                    errcode: if success {
+                        None
+                    } else {
+                        Some(ErrorCode::FORBIDDEN)
+                    },
+                    error: if success {
+                        None
+                    } else {
+                        Some("Authentication challenge failed.")
+                    },
+                    completed: &self.session.complete,
+                    flows: &CONFIG.interactive_auth_flows,
+                    params: &CONFIG.auth_params,
+                    session: &jwt::encode(
+                        &CONFIG.jwt_header,
+                        &Claims::session(
+                            &self.session.sub,
+                            &self.session.device_id,
+                            &self.session.complete,
+                        ),
+                        &CONFIG.auth_key,
+                    )
+                    .unknown()?,
+                })
+                .into())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum LoginType {
     #[serde(rename = "m.login.password")]
     Password,
@@ -161,10 +222,15 @@ pub enum LoginType {
     Token,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct LoginFlow {
     #[serde(rename = "type")]
     pub login_type: LoginType,
+}
+impl Borrow<LoginType> for LoginFlow {
+    fn borrow(&self) -> &LoginType {
+        &self.login_type
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -221,21 +287,25 @@ impl Challenge {
     pub async fn passes<T: Store>(
         &self,
         store: &T,
-        login_type: Option<LoginType>,
         user_id: &UserId,
         _device_id: &DeviceId,
-    ) -> Result<bool, Error> {
-        match (self, login_type) {
-            (Challenge::Password { password }, Some(LoginType::Password))
-            | (Challenge::Password { password }, None) => {
+    ) -> Result<Option<LoginType>, Error> {
+        match self {
+            Challenge::Password { password } => {
                 let pwhash = store.fetch_password_hash(user_id).await?;
-                Ok(pwhash.matches(&password))
+                if pwhash.matches(&password) {
+                    Ok(Some(LoginType::Password))
+                } else {
+                    Ok(None)
+                }
             }
-            (Challenge::Token { token }, Some(LoginType::Token))
-            | (Challenge::Token { token }, None) => {
-                Ok(store.check_otp_exists(&user_id, token).await?)
+            Challenge::Token { token } => {
+                if store.check_otp_exists(&user_id, token).await? {
+                    Ok(Some(LoginType::Token))
+                } else {
+                    Ok(None)
+                }
             }
-            _ => Ok(false),
         }
     }
 }

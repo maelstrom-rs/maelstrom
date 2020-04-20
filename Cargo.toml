@@ -15,6 +15,7 @@ dotenv = "0.15"
 env_logger = "0.7"
 jsonwebtoken = "7.1.0"
 lazy_static = "1.4.0"
+linear-map = { version = "1.2.0", features = ["serde_impl"] }
 pem = "0.7.0"
 rand = "0.7.3"
 ring = "0.16.12"

@@ -4,11 +4,13 @@ use actix_cors::Cors;
 use actix_ratelimit::{MemoryStore, MemoryStoreActor, RateLimiter};
 use actix_web::{middleware::Logger, App, HttpServer};
 use jsonwebtoken as jwt;
+use linear_map::{set::LinearSet, LinearMap};
 
 use crate::db;
+use crate::models::auth::{InteractiveLoginFlow, LoginFlow, LoginType};
 use crate::CONFIG;
 
-mod error;
+pub mod error;
 mod handlers;
 mod routes;
 
@@ -28,10 +30,18 @@ pub struct Config {
     pub auth_key_pub: jwt::DecodingKey<'static>,
     /// Verification rules for auth and session tokens
     pub jwt_validation: jwt::Validation,
+    /// Header for auth and session tokens
+    pub jwt_header: jwt::Header,
     /// Duration in seconds that an auth token is valid for
     pub auth_token_expiration: i64,
     /// Duration in seconds that a session token is valid for
     pub session_expiration: i64,
+    /// Login flows available for standard auth
+    pub auth_flows: LinearSet<LoginFlow>,
+    /// Login flows available for interactive auth
+    pub interactive_auth_flows: LinearSet<InteractiveLoginFlow>,
+    /// Extra params needed by the client for authentication flows
+    pub auth_params: LinearMap<LoginType, serde_json::Value>,
 }
 
 impl Config {
@@ -71,6 +81,8 @@ impl Config {
                 validate_exp: true,
                 validate_nbf: false,
             },
+            hostname,
+            jwt_header: jwt::Header::new(jwt::Algorithm::ES256),
             auth_token_expiration: std::env::var("AUTH_TOKEN_EXPIRATION")
                 .expect("SESSION_EXPIRATION env var missing.")
                 .parse()
@@ -79,7 +91,24 @@ impl Config {
                 .expect("SESSION_EXPIRATION env var missing.")
                 .parse()
                 .expect("Unable to parse SESSION_EXPIRATION as i64."),
-            hostname,
+            auth_flows: {
+                let mut set = LinearSet::new();
+                set.insert(LoginFlow {
+                    login_type: LoginType::Password,
+                });
+                set.insert(LoginFlow {
+                    login_type: LoginType::Token,
+                });
+                set
+            },
+            interactive_auth_flows: {
+                let mut set = LinearSet::new();
+                set.insert(InteractiveLoginFlow {
+                    stages: vec![LoginType::Password],
+                });
+                set
+            },
+            auth_params: LinearMap::new(),
         }
     }
 }

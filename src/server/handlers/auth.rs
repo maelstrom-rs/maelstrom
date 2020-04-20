@@ -18,14 +18,7 @@ use crate::{
 
 lazy_static::lazy_static! {
     pub static ref LOGIN_INFO: String = serde_json::to_string(&json!({
-        "flows": vec![
-            model::LoginFlow {
-                login_type: model::LoginType::Password
-            },
-            model::LoginFlow {
-                login_type: model::LoginType::Token
-            }
-        ]
+        "flows": &CONFIG.auth_flows,
     })).unwrap();
 }
 
@@ -55,14 +48,16 @@ pub async fn login<T: Store>(
     let device_id = req
         .device_id
         .unwrap_or_else(ruma_identifiers::device_id::generate);
-    if !req
+    if let Some(login_type) = req
         .challenge
-        .passes(storage.as_ref(), None, &user_id, &device_id)
+        .passes(storage.as_ref(), &user_id, &device_id)
         .await
         .unknown()?
     {
-        Err("Authentication challenge failed.")
-            .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
+        if !CONFIG.auth_flows.contains(&login_type) {
+            Err("Authentication challenge failed.")
+                .with_codes(StatusCode::FORBIDDEN, ErrorCode::FORBIDDEN)?
+        }
     };
     let update_dev_id_fut = storage.set_device(
         &user_id,

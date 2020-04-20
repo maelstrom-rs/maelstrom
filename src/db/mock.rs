@@ -33,7 +33,7 @@ impl Store for MockStore {
 
     async fn fetch_user_id<'a>(
         &self,
-        _user_id: &'a UserIdentifier,
+        user_id: &'a UserIdentifier,
     ) -> Result<Option<Cow<'a, UserId>>, Error> {
         unimplemented!()
     }
