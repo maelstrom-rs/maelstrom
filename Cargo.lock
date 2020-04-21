@@ -1152,6 +1152,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "linear-map"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfae20f6b19ad527b550c223fddc3077a547fc70cda94b9b566575423fd303ee"
+dependencies = [
+ "serde",
+ "serde_test",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1197,6 +1207,10 @@ dependencies = [
  "env_logger",
  "jsonwebtoken",
  "lazy_static",
+ "linear-map",
+ "pem",
+ "rand",
+ "ring",
  "ruma-identifiers",
  "serde",
  "serde_json",
@@ -1713,6 +1727,15 @@ checksum = "da07b57ee2623368351e9a0488bb0b261322a15a6e0ae53e243cbdc0f4208da9"
 dependencies = [
  "itoa",
  "ryu",
+ "serde",
+]
+
+[[package]]
+name = "serde_test"
+version = "1.0.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48f80694c19c256c75e68ef3240d078e73d7ed56e0f14300656f8b7b000f3852"
+dependencies = [
  "serde",
 ]
 

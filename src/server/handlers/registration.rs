@@ -6,7 +6,7 @@ use actix_web::{
 use serde_json::json;
 
 use crate::server::error::{ErrorCode, MatrixError, ResultExt};
-use crate::{db::Store, models::registration};
+use crate::{db::Store, models::registration as model};
 
 /// Checks to see if a username is available, and valid, for the server.
 ///
@@ -21,14 +21,14 @@ use crate::{db::Store, models::registration};
 /// This can mean that the username becomes unavailable between checking its availability
 /// and attempting to register it.
 pub async fn get_available<T: Store>(
-    params: Query<registration::AvailableParams>,
+    params: Query<model::AvailableParams>,
     storage: Data<T>,
 ) -> Result<HttpResponse, MatrixError> {
     // TODO: !!!Validate Username:
     // M_INVALID_USERNAME : The desired username is not a valid user name.
     // TODO: M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
 
-    if !registration::is_username_valid(&params.username) {
+    if !model::is_username_valid(&params.username) {
         Err(MatrixError::new(
             http::StatusCode::BAD_REQUEST,
             ErrorCode::INVALID_USERNAME,
@@ -88,8 +88,8 @@ pub async fn get_available<T: Store>(
 ///
 /// Any user ID returned by this API must conform to the grammar given in the Matrix specification_.
 pub async fn post_register<T: Store>(
-    params: Query<registration::RequestParams>,
-    mut req: Json<registration::Request>,
+    params: Query<model::RequestParams>,
+    mut req: Json<model::Request>,
     storage: Data<T>,
 ) -> Result<HttpResponse, MatrixError> {
     req.kind = params.kind.clone();
