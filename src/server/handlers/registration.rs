@@ -6,6 +6,7 @@ use actix_web::{
 use serde_json::json;
 
 use crate::server::error::{ErrorCode, MatrixError, ResultExt};
+use crate::CONFIG;
 use crate::{db::Store, models::auth::InteractiveLoginFlow, models::registration as model};
 
 /// Checks to see if a username is available, and valid, for the server.
@@ -24,30 +25,9 @@ pub async fn get_available<T: Store>(
     params: Query<model::AvailableParams>,
     storage: Data<T>,
 ) -> Result<HttpResponse, MatrixError> {
-    // TODO: M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
+    validate_username(&params.username, storage).await?;
 
-    if !model::is_username_valid(&params.username) {
-        Err(MatrixError::new(
-            http::StatusCode::BAD_REQUEST,
-            ErrorCode::INVALID_USERNAME,
-            "The desired username is not a valid user name.",
-        ))?
-    }
-
-    let exists = storage
-        .check_username_exists(&params.username)
-        .await
-        .unknown()?;
-
-    if exists {
-        Err(MatrixError::new(
-            http::StatusCode::BAD_REQUEST,
-            ErrorCode::USER_IN_USE,
-            "Desired user ID is already taken.",
-        ))?
-    } else {
-        Ok(HttpResponse::Ok().json(json!({"avaiable": true})))
-    }
+    Ok(HttpResponse::Ok().json(json!({"avaiable": true})))
 }
 
 /// This API endpoint uses the User-Interactive Authentication API_, except in the
@@ -94,14 +74,59 @@ pub async fn post_register<T: Store>(
         return Ok(HttpResponse::Unauthorized().json(InteractiveLoginFlow::new_dummy()));
     }
 
-    Ok(HttpResponse::Ok().json(""))
+    let username = &req.username.unwrap_or("rando".to_string());
+
+    let res: model::Response = match params.kind {
+        Some(model::Kind::Guest) => model::Response {
+            user_id: &format!("@{}:maelstrom.im", username),
+            access_token: None,
+            device_id: None,
+        },
+        _ => {
+            validate_username(&username, storage).await?;
+            model::Response {
+                user_id: &format!("@{}:maelstrom.im", username),
+                access_token: None,
+                device_id: None,
+            }
+        }
+    };
+
+    Ok(HttpResponse::Ok().json(res))
+}
+
+/// Validates a username, to make sure it doesn't contain invalid chars
+/// and that the user name doesn't exist.
+///
+/// Returns the appropiate MatrixError if there is an issue.
+async fn validate_username<T: Store>(username: &str, storage: Data<T>) -> Result<(), MatrixError> {
+    // TODO: M_EXCLUSIVE : The desired username is in the exclusive namespace claimed by an application service.
+    if !model::is_username_valid(username) {
+        Err(MatrixError::new(
+            http::StatusCode::BAD_REQUEST,
+            ErrorCode::INVALID_USERNAME,
+            "The desired username is not a valid user name.",
+        ))?
+    }
+
+    let exists = storage.check_username_exists(username).await.unknown()?;
+
+    if exists {
+        Err(MatrixError::new(
+            http::StatusCode::BAD_REQUEST,
+            ErrorCode::USER_IN_USE,
+            "Desired user ID is already taken.",
+        ))?
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::mock::MockStore;
-    use actix_web::{http, test, web, App};
+    use actix_web::{http, test, web, web::Bytes, App};
 
     #[actix_rt::test]
     async fn test_get_available_username_taken() {
@@ -179,15 +204,47 @@ mod tests {
         let mut app = test::init_service(
             App::new()
                 .data(test_db)
-                .route("/", web::get().to(post_register::<MockStore>)),
+                .route("/", web::post().to(post_register::<MockStore>)),
         )
         .await;
-        let req = test::TestRequest::get()
+        let req = test::TestRequest::post()
             .uri("/?kind=user")
             .header(http::header::CONTENT_TYPE, "application/json")
+            .set_json(&json!({
+                "username":"test9988",
+                "password":"my fav password is 123"}))
             .to_request();
         let resp = test::call_service(&mut app, req).await;
-
         assert_eq!(resp.status(), http::StatusCode::UNAUTHORIZED);
+
+        let result: Bytes = test::read_body(resp).await;
+        assert_eq!(result, "{\"stages\":[\"m.login.dummy\"]}");
+    }
+
+    #[actix_rt::test]
+    async fn test_reg_with_auth() {
+        crate::init_config_from_file(".env-test");
+
+        let mut test_db = MockStore::new();
+        test_db.check_username_exists_resp = Some(Ok(false));
+
+        let mut app = test::init_service(
+            App::new()
+                .data(test_db)
+                .route("/", web::post().to(post_register::<MockStore>)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/?kind=user")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .set_json(&json!({
+                "auth": {
+                    "type":"m.login.dummy"
+                },
+                "username":"test9988",
+                "password":"my fav password is 123"}))
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert!(resp.status().is_success());
     }
 }

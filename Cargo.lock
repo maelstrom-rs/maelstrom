@@ -1205,6 +1205,7 @@ dependencies = [
  "async-trait",
  "dotenv",
  "env_logger",
+ "http",
  "jsonwebtoken",
  "lazy_static",
  "linear-map",

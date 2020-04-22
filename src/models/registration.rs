@@ -4,6 +4,7 @@ use ruma_identifiers::{DeviceId, UserId};
 use serde::Deserialize;
 
 use super::auth::LoginFlow;
+use crate::server::error::MatrixError;
 use crate::CONFIG;
 
 /// The kind of account to register.
@@ -36,7 +37,6 @@ pub struct AvailableParams {
     pub username: String,
 }
 
-// TODO: Support `auth` and `authentication_data` fields
 #[derive(Clone, Debug, Deserialize)]
 pub struct Request {
     /// Additional authentication information for the user-interactive
@@ -63,6 +63,20 @@ pub struct Request {
     /// The basis for the localpart of the desired Matrix ID. If omitted,
     /// the homeserver MUST generate a Matrix ID local part.
     pub username: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Response<'a> {
+    /// Required. The fully-qualified Matrix user ID (MXID) that has been registered.
+    /// Any user ID returned by this API must conform to the grammar given in the
+    /// [Matrix specification](https://matrix.org/docs/spec/appendices.html#user-identifiers).
+    pub user_id: &'a str,
+    /// An access token for the account. This access token can then be used to authorize
+    /// other requests. Required if the `inhibit_login` option is false.
+    pub access_token: Option<&'a str>,
+    /// ID of the registered device. Will be the same as the corresponding parameter in
+    /// the request, if one was specified. Required if the `inhibit_login` option is false.
+    pub device_id: Option<&'a str>,
 }
 
 /// Checks to see if the username is valid and does NOT

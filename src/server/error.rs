@@ -1,4 +1,5 @@
-use actix_web::{http::StatusCode, Error, HttpResponse};
+use actix_web::{Error, HttpResponse};
+use http::StatusCode;
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct MatrixError {
