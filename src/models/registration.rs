@@ -3,6 +3,7 @@ use std::convert::TryInto;
 use ruma_identifiers::{DeviceId, UserId};
 use serde::Deserialize;
 
+use super::auth::LoginFlow;
 use crate::CONFIG;
 
 /// The kind of account to register.
@@ -38,6 +39,11 @@ pub struct AvailableParams {
 // TODO: Support `auth` and `authentication_data` fields
 #[derive(Clone, Debug, Deserialize)]
 pub struct Request {
+    /// Additional authentication information for the user-interactive
+    /// authentication API. Note that this information is not used to
+    /// define how the registered user should be authenticated, but is
+    /// instead used to authenticate the register call itself.
+    pub auth: Option<LoginFlow>,
     /// ID of the client device. If this does not correspond to a known
     /// client device, a new device will be created. The server will
     /// auto-generate a device_id if this is not specified.
