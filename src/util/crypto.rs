@@ -3,7 +3,7 @@ use ring::signature::KeyPair;
 
 pub fn parse_keypair<B: AsRef<[u8]>>(
     pem_data: B,
-) -> Result<(jwt::EncodingKey, jwt::DecodingKey<'static>), Box<dyn std::error::Error>> {
+) -> Result<(jwt::EncodingKey, jwt::DecodingKey<'static>), anyhow::Error> {
     // TODO: validate it is a prime256v1 PKCS#8 PEM encoded private key
 
     let content = pem::parse(pem_data)?;

@@ -76,21 +76,21 @@ mod tests {
 
     #[test]
     fn test_check_username_valid_good() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.toml");
         let good_username = "good_user";
         assert!(is_username_valid(good_username));
     }
 
     #[test]
     fn test_check_username_valid_bad() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.toml");
         let bad_username = "b@dn!ame$";
         assert_ne!(true, is_username_valid(bad_username));
     }
 
     #[test]
     fn test_check_username_valid_empty() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.toml");
         let bad_username = "";
         assert_ne!(true, is_username_valid(bad_username));
     }

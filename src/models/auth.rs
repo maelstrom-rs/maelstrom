@@ -38,8 +38,8 @@ pub enum TokenKind {
 pub struct Claims<'a> {
     pub kind: TokenKind,
     pub iss: &'static str,
-    pub iat: i64,
-    pub exp: i64,
+    pub iat: u64,
+    pub exp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<u32>,
     pub sub: &'a UserId,
@@ -51,13 +51,13 @@ impl<'a> Claims<'a> {
     pub fn auth(user_id: &'a UserId, device_id: &'a DeviceId) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|a| a.as_secs() as i64)
-            .unwrap_or_else(|a| -(a.duration().as_secs() as i64));
+            .map(|a| a.as_secs())
+            .unwrap_or_else(|a| 0);
         Self {
             kind: TokenKind::Auth,
             iss: &CONFIG.hostname,
             iat: now,
-            exp: now + CONFIG.auth_token_expiration,
+            exp: now.saturating_add(CONFIG.auth_token_expiration.as_secs()),
             jti: Some(rand::random()),
             sub: user_id,
             device_id,
@@ -72,13 +72,13 @@ impl<'a> Claims<'a> {
     ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|a| a.as_secs() as i64)
-            .unwrap_or_else(|a| -(a.duration().as_secs() as i64));
+            .map(|a| a.as_secs())
+            .unwrap_or_else(|a| 0);
         Self {
             kind: TokenKind::Session,
             iss: &CONFIG.hostname,
             iat: now,
-            exp: now + CONFIG.session_expiration,
+            exp: now.saturating_add(CONFIG.auth_token_expiration.as_secs()),
             jti: None,
             sub: user_id,
             device_id,
@@ -87,7 +87,11 @@ impl<'a> Claims<'a> {
     }
 
     pub fn as_jwt(&self) -> Result<String, jwt::errors::Error> {
-        jwt::encode(&CONFIG.jwt_header, &self, &CONFIG.auth_key)
+        jwt::encode(
+            &CONFIG.jwt_config.jwt_header,
+            &self,
+            &CONFIG.jwt_config.auth_key,
+        )
     }
 }
 
@@ -101,7 +105,11 @@ impl FromStr for SessionToken {
     type Err = jwt::errors::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let data = jwt::decode(s, &CONFIG.auth_key_pub, &CONFIG.jwt_validation)?;
+        let data = jwt::decode(
+            s,
+            &CONFIG.jwt_config.auth_key_pub,
+            &CONFIG.jwt_config.jwt_validation,
+        )?;
         Ok(data.claims)
     }
 }
@@ -136,7 +144,11 @@ impl FromStr for AuthToken {
     type Err = jwt::errors::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let data = jwt::decode(s, &CONFIG.auth_key_pub, &CONFIG.jwt_validation)?;
+        let data = jwt::decode(
+            s,
+            &CONFIG.jwt_config.auth_key_pub,
+            &CONFIG.jwt_config.jwt_validation,
+        )?;
         Ok(data.claims)
     }
 }
@@ -199,13 +211,13 @@ impl InteractiveAuth {
                     flows: &CONFIG.interactive_auth_flows,
                     params: &CONFIG.auth_params,
                     session: &jwt::encode(
-                        &CONFIG.jwt_header,
+                        &CONFIG.jwt_config.jwt_header,
                         &Claims::session(
                             &self.session.sub,
                             &self.session.device_id,
                             &self.session.complete,
                         ),
-                        &CONFIG.auth_key,
+                        &CONFIG.jwt_config.auth_key,
                     )
                     .unknown()?,
                 })
