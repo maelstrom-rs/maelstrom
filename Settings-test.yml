@@ -1,20 +1,19 @@
 # The port and address to run the server on
-server_addr = "0.0.0.0:8000"
-
+server_addr: "0.0.0.0:8000"
 # The hostname of the server, used to construct user's id
-hostname = "maelstrom.im"
+hostname: "maelstrom.im"
 
 # The base url of the server, used to advertise homeserver information
-base_url = "http://maelstrom.im:8000/"
+base_url: "http://maelstrom.im:8000/"
 
 # Database URL (will distinguish between postgres, sqlite, sled)
-database_url = "postgres://user:password@localhost:5432/db_name"
+database_url: "postgres://user:password@localhost:5432/db_name"
 
 # The path to a PEM encoded ES256 key for creating auth tokens
-auth_key_file = "sample-private.pem"
+auth_key_file: "sample-private.pem"
 
 # Duration in seconds that an auth token is valid for
-auth_token_expiration = 7776000
+auth_token_expiration: 7776000
 
 # Duration in seconds that a session token is valid for
-session_expiration = 20
+session_expiration: 20

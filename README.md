@@ -40,7 +40,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 git clone https://github.com/maelstrom-rs/maelstrom.git && cd maelstrom
 
 # copy .env-example and set with your specific settings
-cp Settings-example.toml Settings.toml
+cp Settings-example.yml Settings.yml
 
 # build & run
 cargo run --release

@@ -8,4 +8,4 @@
 .env.development.local
 .env.test.local
 .env.production.local
-Settings.toml
+Settings.yml

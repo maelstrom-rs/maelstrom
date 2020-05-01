@@ -15,7 +15,7 @@ use std::time::Duration;
 pub fn setup_settings() -> Result<Settings, anyhow::Error> {
     let mut settings = Settings::default();
 
-    let filename = std::env::var("MAELSTROM_CONFIG_FILE").unwrap_or("Settings.toml".to_string());
+    let filename = std::env::var("MAELSTROM_CONFIG_FILE").unwrap_or("Settings.yml".to_string());
     settings
         .merge(File::with_name(&filename))
         .with_context(|| format!("Could not merge configuration from file {}", filename))?;
