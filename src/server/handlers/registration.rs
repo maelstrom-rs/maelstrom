@@ -106,7 +106,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_get_available_username_taken() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.yml");
 
         let mut test_db = MockStore::new();
         test_db.check_username_exists_resp = Some(Ok(true));
@@ -128,7 +128,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_get_available_username_available() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.yml");
 
         let mut test_db = MockStore::new();
         test_db.check_username_exists_resp = Some(Ok(false));
@@ -150,7 +150,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_get_available_username_invalid() {
-        crate::init_config_from_file(".env-test");
+        crate::init_config_from_file("Settings-test.yml");
 
         let mut test_db = MockStore::new();
         test_db.check_username_exists_resp = Some(Ok(false));

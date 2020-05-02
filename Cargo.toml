@@ -10,12 +10,14 @@ actix-cors = "0.2.0"
 actix-ratelimit = "0.2"
 actix-rt = "1.0"
 actix-web = "2.0"
+anyhow = "1.0"
 async-trait = "0.1.30"
-dotenv = "0.15"
+config = { version = "0.10", default-features = false, features = [ "yaml" ] }
 env_logger = "0.7"
 jsonwebtoken = "7.1.0"
 lazy_static = "1.4.0"
 linear-map = { version = "1.2.0", features = ["serde_impl"] }
+log = { version = "0.4" }
 pem = "0.7.0"
 rand = "0.7.3"
 ring = "0.16.12"
