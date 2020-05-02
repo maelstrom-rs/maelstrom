@@ -48,7 +48,7 @@ pub async fn get_available<T: Store>(
             "Desired user ID is already taken.",
         ))?
     } else {
-        Ok(HttpResponse::Ok().json(json!({"avaiable": true})))
+        Ok(HttpResponse::Ok().json(json!({"available": true})))
     }
 }
 

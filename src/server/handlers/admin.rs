@@ -33,7 +33,7 @@ pub async fn get_wellknown() -> Result<HttpResponse, Error> {
 pub async fn get_versions() -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok()
         .content_type("application/json")
-        .body("{\"versions\":[\"r0.5.0\"]}"))
+        .body("{\"versions\":[\"r0.6.0\"]}"))
 }
 
 #[cfg(test)]
