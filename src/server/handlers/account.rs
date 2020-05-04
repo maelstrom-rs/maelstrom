@@ -19,6 +19,9 @@ mod tests {
 
     use actix_web::{http, test, web, App};
     use ruma_identifiers::UserId;
+    use serde_json::json;
+
+    use futures_util::stream::StreamExt;
 
     #[actix_rt::test]
     async fn test_whoami_with_header_auth_succeeds() {
@@ -30,19 +33,23 @@ mod tests {
                 .wrap(AuthChecker::new()),
         )
         .await;
-        let token = Claims::auth(
-            &UserId::new(&"ruma.io:8080").unwrap(),
-            &"some_id".to_owned(),
-        )
-        .as_jwt()
-        .unwrap();
+        let user_id = UserId::new(&"ruma.io:8080").unwrap();
+        let token = Claims::auth(&user_id, &"some_id".to_owned())
+            .as_jwt()
+            .unwrap();
 
         let req = test::TestRequest::get()
             .uri("/whoami")
             .header(http::header::CONTENT_TYPE, "application/json")
             .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
             .to_request();
-        let resp = test::call_service(&mut app, req).await;
+        let mut resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
+
+        let (bytes, _) = resp.take_body().into_future().await;
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes.unwrap().unwrap().as_ref()).unwrap();
+
+        assert_eq!(json!({ "user_id": user_id }), value);
     }
 }
