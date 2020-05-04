@@ -10,6 +10,7 @@ use crate::CONFIG;
 
 pub mod error;
 mod handlers;
+pub mod middleware;
 mod routes;
 
 /// Starts the server. Takes a `ServerConfig`.

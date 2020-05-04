@@ -1,5 +1,5 @@
 use super::handlers;
-use crate::db::Store;
+use crate::{db::Store, server::middleware::auth_checker::AuthChecker};
 use actix_web::web::ServiceConfig;
 use actix_web::web::{get, post, resource, scope};
 
@@ -27,9 +27,7 @@ pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
                     .route(get().to(handlers::auth::login_info))
                     .route(post().to(handlers::auth::login::<T>)),
             )
-            .service(
-                resource("/account")
-                    .route(get().to(handlers::account::whoami))
-            ),
+            .service(resource("/account").route(get().to(handlers::account::whoami)))
+            .wrap(AuthChecker::new()),
     );
 }
