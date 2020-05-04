@@ -27,7 +27,10 @@ pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
                     .route(get().to(handlers::auth::login_info))
                     .route(post().to(handlers::auth::login::<T>)),
             )
-            .service(resource("/account").route(get().to(handlers::account::whoami)))
-            .wrap(AuthChecker::new()),
+            .service(
+                resource("/account/whoami")
+                    .route(get().to(handlers::account::whoami))
+                    .wrap(AuthChecker::new()),
+            ),
     );
 }
