@@ -44,12 +44,10 @@ pub struct AuthCheckerMiddleware<S> {
 }
 
 fn get_token_from_query(query_string: &str) -> Option<&str> {
-    let mut query_map = query_string.split('&');
-    for element in &mut query_map {
-        let mut pair = element.split('=');
-        if let Some(key) = pair.next() {
+    if let Ok(query_map) = serde_urlencoded::from_str::<Vec<(&str, &str)>>(query_string) {
+        for (key, value) in query_map {
             if key == "access_token" {
-                return pair.next();
+                return Some(value);
             }
         }
     }
@@ -92,6 +90,7 @@ where
             .or_else(|| get_token_from_query(req.query_string()))
             .and_then(|repr| get_typed_token(repr));
 
+        // TODO: Check the JTI to see if the user is not logged out
         let authorized = if let Some(token) = auth_token_option {
             req.extensions_mut().insert(token);
             true

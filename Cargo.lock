@@ -1260,6 +1260,7 @@ dependencies = [
  "ruma-identifiers",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "uuid",
 ]

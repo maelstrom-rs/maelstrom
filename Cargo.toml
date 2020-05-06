@@ -28,5 +28,6 @@ ring = "0.16.12"
 ruma-identifiers = {version = "0.15", features = [ "rand", "serde" ] }
 serde = "1.0"
 serde_json = "1.0"
+serde_urlencoded = "0.6.1"
 sqlx = { version = "0.3", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "sqlite" ] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
