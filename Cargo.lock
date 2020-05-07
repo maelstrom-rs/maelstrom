@@ -1239,13 +1239,17 @@ name = "maelstrom"
 version = "0.1.0"
 dependencies = [
  "actix-cors",
+ "actix-http",
  "actix-ratelimit",
  "actix-rt",
+ "actix-service",
  "actix-web",
  "anyhow",
  "async-trait",
  "config",
  "env_logger",
+ "futures",
+ "futures-util",
  "jsonwebtoken",
  "lazy_static",
  "linear-map",
@@ -1256,6 +1260,7 @@ dependencies = [
  "ruma-identifiers",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "uuid",
 ]
