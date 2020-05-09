@@ -10,7 +10,7 @@ use crate::{
     models::auth as auth_model,
     server::error::{ErrorCode, MatrixError},
 };
-
+use ruma_identifiers::DeviceId;
 use std::task::{Context, Poll};
 
 use std::marker::PhantomData;
@@ -112,20 +112,31 @@ where
             })
             .or_else(|| get_token_from_query(req.query_string()))
             .and_then(|repr| get_typed_token(repr));
-
-        // TODO: Check the JTI to see if the user is not logged out
-
-        let data: Data<T> = req.app_data().unwrap();
-        let authorized = if let Some(token) = auth_token_option {
-            req.extensions_mut().insert(token);
-            true
+        
+        let mut device_id_option: Option<DeviceId> = None;
+        let mut is_valid = if let Some(token) = auth_token_option {
+            if token.is_expired() {
+                false
+            } else {
+                device_id_option = Some(token.device_id.clone());
+                req.extensions_mut().insert(token);
+                true
+            }
         } else {
             false
         };
+
+        let storage: Data<T> = req.app_data().unwrap();
         let fut = self.service.call(req);
 
         async move {
-            if !authorized {
+            is_valid &= if let Some(device_id) = device_id_option {
+                storage.check_device_id_exists(&device_id).await.unwrap()
+            } else {
+                false
+            };
+            
+            if !is_valid {
                 return Err(MatrixError::new(
                     StatusCode::UNAUTHORIZED,
                     ErrorCode::UNKNOWN_TOKEN,

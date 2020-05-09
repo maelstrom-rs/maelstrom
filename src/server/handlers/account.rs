@@ -30,7 +30,7 @@ mod tests {
         let mut app = test::init_service(
             App::new()
                 .route("/whoami", web::get().to(whoami))
-                .wrap(AuthChecker::new()),
+                .wrap(AuthChecker::mock()),
         )
         .await;
         let user_id = UserId::new(&"ruma.io:8080").unwrap();

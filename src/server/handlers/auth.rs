@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use actix_web::{
     http::StatusCode,
     web::{Data, Json},
-    Error, HttpResponse,
+    Error, HttpResponse, HttpRequest
 };
 use jsonwebtoken as jwt;
 use ruma_identifiers::{DeviceId, UserId};
@@ -78,5 +78,21 @@ pub async fn login<T: Store>(
         },
     });
     update_dev_id_fut.await.unknown()?;
+    Ok(res)
+}
+
+pub async fn logout<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<HttpResponse, Error> {
+    let token: model::AuthToken = req.extensions_mut().remove().unwrap();
+    let remove_device_fut = storage.remove_device_id(&token.device_id, &token.sub);
+    let res = HttpResponse::Ok().json(model::LogoutResponse {});
+    remove_device_fut.await.unknown()?;
+    Ok(res)
+}
+
+pub async fn logout_all<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<HttpResponse, Error> {
+    let token: model::AuthToken = req.extensions_mut().remove().unwrap();
+    let remove_device_fut = storage.remove_all_device_ids(&token.sub);
+    let res = HttpResponse::Ok().json(model::LogoutResponse {});
+    remove_device_fut.await.unknown()?;
     Ok(res)
 }

@@ -139,6 +139,16 @@ pub struct AuthToken {
     pub sub: UserId,
     pub device_id: DeviceId,
     pub jti: u32,
+    pub exp: u64,
+}
+impl AuthToken {
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|a| a.as_secs())
+            .unwrap_or_else(|a| 0);
+        now >= self.exp
+    }
 }
 impl FromStr for AuthToken {
     type Err = jwt::errors::Error;
@@ -350,6 +360,9 @@ pub struct LoginResponse<'a> {
     pub device_id: &'a DeviceId,
     pub well_known: DiscoveryInfo,
 }
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LogoutResponse;
 
 // TODO
 pub enum PWHash {}

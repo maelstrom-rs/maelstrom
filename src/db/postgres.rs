@@ -76,6 +76,18 @@ impl Store for PostgresStore {
         unimplemented!()
     }
 
+    async fn check_device_id_exists(&self, device_id: &DeviceId) -> Result<bool, Error> {
+        unimplemented!()
+    }
+
+    async fn remove_device_id(&self, device_id: &DeviceId, user_id: &UserId) -> Result<(), Error> {
+        unimplemented!()
+    }
+    
+    async fn remove_all_device_ids(&self, user_id: &UserId) -> Result<(), Error> {
+        unimplemented!()
+    }
+
     async fn set_device<'a>(
         &self,
         user_id: &UserId,
