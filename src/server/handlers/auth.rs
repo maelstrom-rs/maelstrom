@@ -81,6 +81,9 @@ pub async fn login<T: Store>(
     Ok(res)
 }
 
+/// Deletes device_id related to the user_id in the database
+///
+/// POST /_matrix/client/r0/logout
 pub async fn logout<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<HttpResponse, Error> {
     let token: model::AuthToken = req.extensions_mut().remove().unwrap();
     let remove_device_fut = storage.remove_device_id(&token.device_id, &token.sub);
@@ -89,6 +92,9 @@ pub async fn logout<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<Http
     Ok(res)
 }
 
+/// Deletes all device_ids related to the user_id in the database
+///
+/// POST /_matrix/client/r0/logout/all
 pub async fn logout_all<T: Store>(
     storage: Data<T>,
     req: HttpRequest,
