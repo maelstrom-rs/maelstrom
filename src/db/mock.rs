@@ -76,7 +76,7 @@ impl Store for MockStore {
     async fn check_otp_exists(&self, _user_id: &UserId, _otp: &str) -> Result<bool, Error> {
         unimplemented!()
     }
-    
+
     async fn check_device_id_exists(&self, device_id: &DeviceId) -> Result<bool, Error> {
         self.check_device_id_exists_resp
             .clone()
@@ -88,7 +88,7 @@ impl Store for MockStore {
             .clone()
             .expect("remove_device_id_resp not set.")
     }
-    
+
     async fn remove_all_device_ids(&self, user_id: &UserId) -> Result<(), Error> {
         self.remove_all_device_ids_resp
             .clone()

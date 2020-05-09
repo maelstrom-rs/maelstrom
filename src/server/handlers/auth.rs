@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use actix_web::{
     http::StatusCode,
     web::{Data, Json},
-    Error, HttpResponse, HttpRequest
+    Error, HttpRequest, HttpResponse,
 };
 use jsonwebtoken as jwt;
 use ruma_identifiers::{DeviceId, UserId};
@@ -89,10 +89,93 @@ pub async fn logout<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<Http
     Ok(res)
 }
 
-pub async fn logout_all<T: Store>(storage: Data<T>, req: HttpRequest) -> Result<HttpResponse, Error> {
+pub async fn logout_all<T: Store>(
+    storage: Data<T>,
+    req: HttpRequest,
+) -> Result<HttpResponse, Error> {
     let token: model::AuthToken = req.extensions_mut().remove().unwrap();
     let remove_device_fut = storage.remove_all_device_ids(&token.sub);
     let res = HttpResponse::Ok().json(model::LogoutResponse {});
     remove_device_fut.await.unknown()?;
     Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        db::mock::MockStore, models::auth::Claims, server::middleware::auth_checker::AuthChecker,
+    };
+
+    use actix_service::Service;
+    use actix_web::{http, test, web, App};
+    use ruma_identifiers::UserId;
+
+    use futures_util::stream::StreamExt;
+
+    #[actix_rt::test]
+    async fn test_logout_succeeds() {
+        let mut app = test::init_service(
+            App::new()
+                .data(
+                    MockStore::new()
+                        .with_check_device_id_exists_resp(Ok(true))
+                        .with_remove_device_id_resp(Ok(())),
+                )
+                .route("/logout", web::post().to(logout::<MockStore>))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
+        let user_id = UserId::new(&"ruma.io:8080").unwrap();
+        let token = Claims::auth(&user_id, &"some_id".to_owned())
+            .as_jwt()
+            .unwrap();
+
+        let req = test::TestRequest::post()
+            .uri("/logout")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
+            .to_request();
+        let mut resp = app.call(req).await.unwrap();
+        assert!(resp.status().is_success());
+
+        let (bytes, _) = resp.take_body().into_future().await;
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes.unwrap().unwrap().as_ref()).unwrap();
+
+        assert_eq!(serde_json::value::Value::Null, value);
+    }
+
+    #[actix_rt::test]
+    async fn test_logout_all_succeeds() {
+        let mut app = test::init_service(
+            App::new()
+                .data(
+                    MockStore::new()
+                        .with_check_device_id_exists_resp(Ok(true))
+                        .with_remove_all_device_ids_resp(Ok(())),
+                )
+                .route("/logout_all", web::post().to(logout_all::<MockStore>))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
+        let user_id = UserId::new(&"ruma.io:8080").unwrap();
+        let token = Claims::auth(&user_id, &"some_id".to_owned())
+            .as_jwt()
+            .unwrap();
+
+        let req = test::TestRequest::post()
+            .uri("/logout_all")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
+            .to_request();
+        let mut resp = app.call(req).await.unwrap();
+        assert!(resp.status().is_success());
+
+        let (bytes, _) = resp.take_body().into_future().await;
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes.unwrap().unwrap().as_ref()).unwrap();
+
+        assert_eq!(serde_json::value::Value::Null, value);
+    }
 }

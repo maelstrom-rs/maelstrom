@@ -15,8 +15,11 @@ pub async fn whoami(req: HttpRequest) -> Result<HttpResponse, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{models::auth::Claims, server::middleware::auth_checker::AuthChecker};
+    use crate::{
+        db::mock::MockStore, models::auth::Claims, server::middleware::auth_checker::AuthChecker,
+    };
 
+    use actix_service::Service;
     use actix_web::{http, test, web, App};
     use ruma_identifiers::UserId;
     use serde_json::json;
@@ -29,8 +32,9 @@ mod tests {
 
         let mut app = test::init_service(
             App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(true)))
                 .route("/whoami", web::get().to(whoami))
-                .wrap(AuthChecker::mock()),
+                .wrap(AuthChecker::mock_store()),
         )
         .await;
         let user_id = UserId::new(&"ruma.io:8080").unwrap();
@@ -43,7 +47,8 @@ mod tests {
             .header(http::header::CONTENT_TYPE, "application/json")
             .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
             .to_request();
-        let mut resp = test::call_service(&mut app, req).await;
+
+        let mut resp = app.call(req).await.unwrap();
         assert!(resp.status().is_success());
 
         let (bytes, _) = resp.take_body().into_future().await;
