@@ -23,14 +23,32 @@ pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
                     .route(get().to(handlers::registration::get_available::<T>)),
             )
             .service(
+                scope("/logout")
+                    .service(
+                        resource("/all")
+                            .route(get().to(handlers::auth::login_info))
+                            .wrap(AuthChecker::postgres()),
+                    )
+                    .service(
+                        resource("")
+                            .route(get().to(handlers::auth::login_info))
+                            .wrap(AuthChecker::postgres()),
+                    ),
+            )
+            .service(
                 resource("/login")
+                    .route(get().to(handlers::auth::login_info))
+                    .route(post().to(handlers::auth::login::<T>)),
+            )
+            .service(
+                resource("/logout")
                     .route(get().to(handlers::auth::login_info))
                     .route(post().to(handlers::auth::login::<T>)),
             )
             .service(
                 resource("/account/whoami")
                     .route(get().to(handlers::account::whoami))
-                    .wrap(AuthChecker::new()),
+                    .wrap(AuthChecker::postgres()),
             ),
     );
 }

@@ -1,46 +1,68 @@
 use std::str::FromStr;
 
 use actix_http::httpmessage::HttpMessage;
-use actix_web::{dev::ServiceRequest, dev::ServiceResponse, http, http::StatusCode, Error};
+use actix_web::{
+    dev::ServiceRequest, dev::ServiceResponse, http, http::StatusCode, web::Data, Error,
+};
 
 use crate::{
+    db::{mock::MockStore, PostgresStore, Store},
     models::auth as auth_model,
     server::error::{ErrorCode, MatrixError},
 };
 
 use std::task::{Context, Poll};
 
+use std::marker::PhantomData;
+
 use actix_service::{Service, Transform};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
-pub struct AuthChecker;
+pub struct AuthChecker<T> {
+    phantom: PhantomData<T>,
+}
 
-impl AuthChecker {
-    pub fn new() -> Self {
-        AuthChecker {}
+impl AuthChecker<MockStore> {
+    pub fn mock() -> Self {
+        AuthChecker {
+            phantom: PhantomData::<MockStore>,
+        }
     }
 }
 
-impl<S, B> Transform<S> for AuthChecker
+impl AuthChecker<PostgresStore> {
+    pub fn postgres() -> Self {
+        AuthChecker {
+            phantom: PhantomData::<PostgresStore>,
+        }
+    }
+}
+
+impl<S, B, T> Transform<S> for AuthChecker<T>
 where
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
+    T: 'static + Store,
 {
     type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
     type Error = Error;
     type InitError = ();
-    type Transform = AuthCheckerMiddleware<S>;
+    type Transform = AuthCheckerMiddleware<S, T>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(AuthCheckerMiddleware { service })
+        ok(AuthCheckerMiddleware {
+            service,
+            phantom: self.phantom,
+        })
     }
 }
 
-pub struct AuthCheckerMiddleware<S> {
+pub struct AuthCheckerMiddleware<S, T> {
     service: S,
+    phantom: PhantomData<T>,
 }
 
 fn get_token_from_query(query_string: &str) -> Option<&str> {
@@ -62,11 +84,12 @@ fn get_typed_token(string_repr: &str) -> Option<auth_model::AuthToken> {
     auth_model::AuthToken::from_str(string_repr).ok()
 }
 
-impl<S, B> Service for AuthCheckerMiddleware<S>
+impl<S, B, T> Service for AuthCheckerMiddleware<S, T>
 where
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
+    T: 'static + Store,
 {
     type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
@@ -91,6 +114,8 @@ where
             .and_then(|repr| get_typed_token(repr));
 
         // TODO: Check the JTI to see if the user is not logged out
+
+        let data: Data<T> = req.app_data().unwrap();
         let authorized = if let Some(token) = auth_token_option {
             req.extensions_mut().insert(token);
             true
@@ -133,7 +158,7 @@ mod tests {
         )
         .as_jwt()
         .unwrap();
-        let mut srv = AuthChecker::new()
+        let mut srv = AuthChecker::mock()
             .new_transform(srv.into_service())
             .await
             .unwrap();
@@ -154,7 +179,7 @@ mod tests {
         )
         .as_jwt()
         .unwrap();
-        let mut srv = AuthChecker::new()
+        let mut srv = AuthChecker::mock()
             .new_transform(srv.into_service())
             .await
             .unwrap();
@@ -169,7 +194,7 @@ mod tests {
         let srv = |req: ServiceRequest| {
             ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
         };
-        let mut srv = AuthChecker::new()
+        let mut srv = AuthChecker::mock()
             .new_transform(srv.into_service())
             .await
             .unwrap();
@@ -184,7 +209,7 @@ mod tests {
         let srv = |req: ServiceRequest| {
             ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
         };
-        let mut srv = AuthChecker::new()
+        let mut srv = AuthChecker::mock()
             .new_transform(srv.into_service())
             .await
             .unwrap();
