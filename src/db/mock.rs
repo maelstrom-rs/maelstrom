@@ -77,7 +77,11 @@ impl Store for MockStore {
         unimplemented!()
     }
 
-    async fn check_device_id_exists(&self, device_id: &DeviceId) -> Result<bool, Error> {
+    async fn check_device_id_exists(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+    ) -> Result<bool, Error> {
         self.check_device_id_exists_resp
             .clone()
             .expect("check_device_id_exists_resp not set.")

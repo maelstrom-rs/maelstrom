@@ -76,16 +76,39 @@ impl Store for PostgresStore {
         unimplemented!()
     }
 
-    async fn check_device_id_exists(&self, device_id: &DeviceId) -> Result<bool, Error> {
-        unimplemented!()
+    async fn check_device_id_exists(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+    ) -> Result<bool, Error> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM devices WHERE localpart = $1 AND device_id = $2")
+                .bind(user_id.localpart())
+                .bind(device_id)
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(row.0 > 0)
     }
 
     async fn remove_device_id(&self, device_id: &DeviceId, user_id: &UserId) -> Result<(), Error> {
-        unimplemented!()
+        let _: (i64,) =
+            sqlx::query_as("DELETE FROM devices WHERE localpart = $1 AND device_id = $2")
+                .bind(user_id.localpart())
+                .bind(device_id)
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(())
     }
 
     async fn remove_all_device_ids(&self, user_id: &UserId) -> Result<(), Error> {
-        unimplemented!()
+        let _: (i64,) = sqlx::query_as("DELETE FROM devices WHERE localpart = $1")
+            .bind(user_id.localpart())
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(())
     }
 
     async fn set_device<'a>(

@@ -24,7 +24,11 @@ pub trait Store: Clone + Sync + Send + Sized {
     /// checks if username exists
     async fn check_username_exists(&self, username: &str) -> Result<bool, Error>;
 
-    async fn check_device_id_exists(&self, device_id: &DeviceId) -> Result<bool, Error>;
+    async fn check_device_id_exists(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+    ) -> Result<bool, Error>;
 
     async fn remove_device_id(&self, device_id: &DeviceId, user_id: &UserId) -> Result<(), Error>;
 

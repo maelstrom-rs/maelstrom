@@ -22,19 +22,17 @@ pub struct AuthChecker<T> {
     phantom: PhantomData<T>,
 }
 
-impl AuthChecker<MockStore> {
-    pub fn mock_store() -> Self {
+impl<T> AuthChecker<T> {
+    pub fn new() -> Self {
         AuthChecker {
-            phantom: PhantomData::<MockStore>,
+            phantom: PhantomData::<T>,
         }
     }
 }
 
-impl AuthChecker<PostgresStore> {
-    pub fn postgres() -> Self {
-        AuthChecker {
-            phantom: PhantomData::<PostgresStore>,
-        }
+impl AuthChecker<MockStore> {
+    pub fn mock_store() -> Self {
+        AuthChecker::<MockStore>::new()
     }
 }
 
@@ -113,12 +111,10 @@ where
             .or_else(|| get_token_from_query(req.query_string()))
             .and_then(|repr| get_typed_token(repr));
 
-        let mut device_id_option: Option<DeviceId> = None;
-        let mut is_valid = if let Some(token) = auth_token_option {
+        let mut is_valid = if let Some(token) = auth_token_option.clone() {
             if token.is_expired() {
                 false
             } else {
-                device_id_option = Some(token.device_id.clone());
                 req.extensions_mut().insert(token);
                 true
             }
@@ -130,8 +126,11 @@ where
         let fut = self.service.call(req);
 
         async move {
-            is_valid &= if let Some(device_id) = device_id_option {
-                storage.check_device_id_exists(&device_id).await.unwrap()
+            is_valid &= if let Some(token) = auth_token_option {
+                storage
+                    .check_device_id_exists(&token.sub, &token.device_id)
+                    .await
+                    .unwrap()
             } else {
                 false
             };

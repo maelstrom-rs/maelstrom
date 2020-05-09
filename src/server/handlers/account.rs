@@ -48,6 +48,8 @@ mod tests {
             .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
             .to_request();
 
+        // Better use app.call instead of test::call_service, because call_service panics (unwraps) on errors
+        // And we can test errors by removing .unwrap
         let mut resp = app.call(req).await.unwrap();
         assert!(resp.status().is_success());
 
