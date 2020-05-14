@@ -112,12 +112,8 @@ where
             .and_then(|repr| get_typed_token(repr));
 
         let mut is_valid = if let Some(token) = auth_token_option.clone() {
-            if token.is_expired() {
-                false
-            } else {
-                req.extensions_mut().insert(token);
-                true
-            }
+            req.extensions_mut().insert(token);
+            true
         } else {
             false
         };
