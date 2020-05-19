@@ -138,7 +138,6 @@ impl SessionToken {
 pub struct AuthToken {
     pub sub: UserId,
     pub device_id: DeviceId,
-    pub jti: u32,
 }
 impl FromStr for AuthToken {
     type Err = jwt::errors::Error;
@@ -350,6 +349,9 @@ pub struct LoginResponse<'a> {
     pub device_id: &'a DeviceId,
     pub well_known: DiscoveryInfo,
 }
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LogoutResponse;
 
 // TODO
 pub enum PWHash {}

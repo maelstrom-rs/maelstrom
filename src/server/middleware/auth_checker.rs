@@ -1,46 +1,66 @@
 use std::str::FromStr;
 
 use actix_http::httpmessage::HttpMessage;
-use actix_web::{dev::ServiceRequest, dev::ServiceResponse, http, http::StatusCode, Error};
+use actix_web::{
+    dev::ServiceRequest, dev::ServiceResponse, http, http::StatusCode, web::Data, Error,
+};
 
 use crate::{
+    db::{mock::MockStore, PostgresStore, Store},
     models::auth as auth_model,
     server::error::{ErrorCode, MatrixError},
 };
-
+use ruma_identifiers::DeviceId;
 use std::task::{Context, Poll};
+
+use std::marker::PhantomData;
 
 use actix_service::{Service, Transform};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
-pub struct AuthChecker;
+pub struct AuthChecker<T> {
+    phantom: PhantomData<T>,
+}
 
-impl AuthChecker {
+impl<T> AuthChecker<T> {
     pub fn new() -> Self {
-        AuthChecker {}
+        AuthChecker {
+            phantom: PhantomData::<T>,
+        }
     }
 }
 
-impl<S, B> Transform<S> for AuthChecker
+impl AuthChecker<MockStore> {
+    pub fn mock_store() -> Self {
+        AuthChecker::<MockStore>::new()
+    }
+}
+
+impl<S, B, T> Transform<S> for AuthChecker<T>
 where
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
+    T: 'static + Store,
 {
     type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
     type Error = Error;
     type InitError = ();
-    type Transform = AuthCheckerMiddleware<S>;
+    type Transform = AuthCheckerMiddleware<S, T>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(AuthCheckerMiddleware { service })
+        ok(AuthCheckerMiddleware {
+            service,
+            phantom: self.phantom,
+        })
     }
 }
 
-pub struct AuthCheckerMiddleware<S> {
+pub struct AuthCheckerMiddleware<S, T> {
     service: S,
+    phantom: PhantomData<T>,
 }
 
 fn get_token_from_query(query_string: &str) -> Option<&str> {
@@ -62,11 +82,12 @@ fn get_typed_token(string_repr: &str) -> Option<auth_model::AuthToken> {
     auth_model::AuthToken::from_str(string_repr).ok()
 }
 
-impl<S, B> Service for AuthCheckerMiddleware<S>
+impl<S, B, T> Service for AuthCheckerMiddleware<S, T>
 where
     S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
+    T: 'static + Store,
 {
     type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
@@ -90,17 +111,27 @@ where
             .or_else(|| get_token_from_query(req.query_string()))
             .and_then(|repr| get_typed_token(repr));
 
-        // TODO: Check the JTI to see if the user is not logged out
-        let authorized = if let Some(token) = auth_token_option {
+        let mut is_valid = if let Some(token) = auth_token_option.clone() {
             req.extensions_mut().insert(token);
             true
         } else {
             false
         };
+
+        let storage: Data<T> = req.app_data().unwrap();
         let fut = self.service.call(req);
 
         async move {
-            if !authorized {
+            is_valid &= if let Some(token) = auth_token_option {
+                storage
+                    .check_device_id_exists(&token.sub, &token.device_id)
+                    .await
+                    .unwrap()
+            } else {
+                false
+            };
+
+            if !is_valid {
                 return Err(MatrixError::new(
                     StatusCode::UNAUTHORIZED,
                     ErrorCode::UNKNOWN_TOKEN,
@@ -117,80 +148,103 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::mock::MockStore;
     use crate::models::auth::Claims;
-    use actix_service::IntoService;
-    use actix_web::{http, test, HttpResponse};
+    use actix_web::{http, test, web, App, HttpResponse};
     use ruma_identifiers::UserId;
+
+    async fn test_handler() -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::build(StatusCode::OK).finish())
+    }
 
     #[actix_rt::test]
     async fn test_header_auth_succeeds() {
-        let srv = |req: ServiceRequest| {
-            ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
-        };
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(true)))
+                .route("/", web::get().to(test_handler))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
         let token = Claims::auth(
             &UserId::new(&"ruma.io:8080").unwrap(),
             &"some_id".to_owned(),
         )
         .as_jwt()
         .unwrap();
-        let mut srv = AuthChecker::new()
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
         let req = test::TestRequest::get()
             .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
-            .to_srv_request();
-        assert!(srv.call(req).await.is_ok());
+            .to_request();
+        assert!(app.call(req).await.is_ok());
     }
 
     #[actix_rt::test]
     async fn test_query_string_auth_succeeds() {
-        let srv = |req: ServiceRequest| {
-            ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
-        };
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(true)))
+                .route("/", web::get().to(test_handler))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
         let token = Claims::auth(
             &UserId::new(&"ruma.io:8080").unwrap(),
             &"some_id".to_owned(),
         )
         .as_jwt()
         .unwrap();
-        let mut srv = AuthChecker::new()
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
         let req = test::TestRequest::get()
             .uri(format!("/?access_token={}", token).as_str())
-            .to_srv_request();
-        assert!(srv.call(req).await.is_ok());
+            .to_request();
+        assert!(app.call(req).await.is_ok());
+    }
+
+    #[actix_rt::test]
+    async fn test_query_string_auth_fails_empty_db() {
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(false)))
+                .route("/", web::get().to(test_handler))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
+        let token = Claims::auth(
+            &UserId::new(&"ruma.io:8080").unwrap(),
+            &"some_id".to_owned(),
+        )
+        .as_jwt()
+        .unwrap();
+        let req = test::TestRequest::get()
+            .uri(format!("/?access_token={}", token).as_str())
+            .to_request();
+        assert!(app.call(req).await.is_err());
     }
 
     #[actix_rt::test]
     async fn test_no_auth_fails() {
-        let srv = |req: ServiceRequest| {
-            ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
-        };
-        let mut srv = AuthChecker::new()
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
-        let req = test::TestRequest::get()
-            .uri("/some_method")
-            .to_srv_request();
-        assert!(srv.call(req).await.is_err());
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(true)))
+                .route("/", web::get().to(test_handler))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
+        let req = test::TestRequest::get().uri("/").to_request();
+        assert!(app.call(req).await.is_err());
     }
 
     #[actix_rt::test]
     async fn test_incorrect_token_fails() {
-        let srv = |req: ServiceRequest| {
-            ok(req.into_response(HttpResponse::build(StatusCode::OK).finish()))
-        };
-        let mut srv = AuthChecker::new()
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new().with_check_device_id_exists_resp(Ok(true)))
+                .route("/", web::get().to(test_handler))
+                .wrap(AuthChecker::mock_store()),
+        )
+        .await;
         let req = test::TestRequest::get()
             .uri("/?access_token=token")
-            .to_srv_request();
-        assert!(srv.call(req).await.is_err());
+            .to_request();
+        assert!(app.call(req).await.is_err());
     }
 }
