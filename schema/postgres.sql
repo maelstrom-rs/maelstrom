@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS accounts (
   is_guest bool DEFAULT FALSE NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_accounts_is_guest ON accounts(is_guest);
+
+DROP TABLE IF EXISTS account_profiles;
+CREATE TABLE IF NOT EXISTS account_profiles (
+  -- The Matrix user ID localpart for this account
+  localpart TEXT NOT NULL PRIMARY KEY,
+  -- The display name for this account
+  display_name TEXT,
+  -- The URL of the avatar for this account
+  avatar_url TEXT
+);
+
 ----------------
 -- Devices
 ----------------
