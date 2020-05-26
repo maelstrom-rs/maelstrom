@@ -72,6 +72,16 @@ impl Store for PostgresStore {
         unimplemented!()
     }
 
+    async fn fetch_display_name(&self, user_id: &UserId) -> Result<String, Error> {
+        let row: (String,) =
+            sqlx::query_as("SELECT display_name FROM account_profiles WHERE localpart = $1")
+                .bind(user_id.localpart())
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(row.0)
+    }
+
     async fn check_otp_exists(&self, user_id: &UserId, otp: &str) -> Result<bool, Error> {
         unimplemented!()
     }

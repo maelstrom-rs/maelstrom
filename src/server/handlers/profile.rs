@@ -17,10 +17,13 @@ pub async fn get_displayname<T: Store>(
     req: Path<String>,
     storage: Data<T>,
 ) -> Result<HttpResponse, Error> {
-    let userId = UserId::try_from(req.into_inner())
+    let user_id = UserId::try_from(req.into_inner())
         .with_codes(StatusCode::BAD_REQUEST, ErrorCode::INVALID_PARAM)?;
+    let display_name = storage.fetch_display_name(&user_id).await
+        .with_codes(StatusCode::NOT_FOUND, ErrorCode::UNKNOWN)?;
+
     Ok(HttpResponse::Ok()
         .json(profile_model::DisplayNameResponse {
-            displayname: String::from(userId),
+            displayname: display_name,
     }))
 }
