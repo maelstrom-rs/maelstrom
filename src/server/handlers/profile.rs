@@ -1,6 +1,7 @@
 use std::convert::{TryFrom, From};
 
 use actix_web::{
+    http::StatusCode,
     web::{Data, Path},
     Error, HttpRequest, HttpResponse};
 
@@ -8,14 +9,16 @@ use ruma_identifiers::UserId;
 
 use crate::{
     models::profile as profile_model,
-    db::Store
+    db::Store,
+    server::error::{ResultExt, ErrorCode},
 };
 
 pub async fn get_displayname<T: Store>(
     req: Path<String>,
     storage: Data<T>,
 ) -> Result<HttpResponse, Error> {
-    let userId = UserId::try_from(req.into_inner()).unwrap();
+    let userId = UserId::try_from(req.into_inner())
+        .with_codes(StatusCode::BAD_REQUEST, ErrorCode::INVALID_PARAM)?;
     Ok(HttpResponse::Ok()
         .json(profile_model::DisplayNameResponse {
             displayname: String::from(userId),
