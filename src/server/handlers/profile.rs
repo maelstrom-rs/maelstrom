@@ -27,3 +27,40 @@ pub async fn get_displayname<T: Store>(
             displayname: display_name,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        db::mock::MockStore,
+        models::profile as profile_model,
+    };
+
+    use actix_service::Service;
+    use actix_web::{http, test, web, App};
+
+    #[actix_rt::test]
+    async fn test_get_display_name_succeeds() {
+        let mut app = test::init_service(
+            App::new()
+                .data(MockStore::new())
+                .route("/{userId}/displayname", web::get().to(get_displayname::<MockStore>))
+        ).await;
+
+        let req = test::TestRequest::get()
+            .uri("/@testId:testServer/displayname")
+            .to_request();
+
+        let mut resp = app.call(req).await.unwrap();
+        assert!(resp.status().is_success());
+
+        let expected_body = profile_model::DisplayNameResponse {
+                displayname: String::from("testDisplayName"),
+            };
+
+        let body: profile_model::DisplayNameResponse = serde_json::from_slice(&test::read_body(resp).await)
+            .unwrap_or_else(|_| panic!("Couldn't deserialize response"));
+
+        assert_eq!(body, expected_body);
+    }
+}
