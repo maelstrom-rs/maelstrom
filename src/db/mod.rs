@@ -41,6 +41,8 @@ pub trait Store: Clone + Sync + Send + Sized {
 
     async fn fetch_password_hash(&self, user_id: &UserId) -> Result<PWHash, Error>;
 
+    async fn fetch_display_name(&self, user_id: &UserId) -> Result<String, Error>;
+
     async fn check_otp_exists(&self, user_id: &UserId, otp: &str) -> Result<bool, Error>;
 
     async fn set_device<'a>(

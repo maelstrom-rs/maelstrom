@@ -73,6 +73,10 @@ impl Store for MockStore {
         unimplemented!()
     }
 
+    async fn fetch_display_name(&self, _user_id: &UserId) -> Result<String, Error> {
+        return Ok(String::from("testDisplayName"));
+    }
+
     async fn check_otp_exists(&self, _user_id: &UserId, _otp: &str) -> Result<bool, Error> {
         unimplemented!()
     }

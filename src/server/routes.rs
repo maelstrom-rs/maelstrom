@@ -44,6 +44,13 @@ pub fn config<T: Store + 'static>(cfg: &mut ServiceConfig) {
                 resource("/account/whoami")
                     .route(get().to(handlers::account::whoami))
                     .wrap(AuthChecker::<T>::new()),
+            )
+            .service(
+                scope("/profile")
+                    .service(
+                        resource("/{userId}/displayname")
+                            .route(get().to(handlers::profile::get_displayname::<T>))
+                    )
             ),
     );
 }
