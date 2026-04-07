@@ -1,78 +1,160 @@
-# Maelstrom ![](https://github.com/maelstrom-rs/maelstrom/workflows/Build/badge.svg)
+# Maelstrom
 
 <img src="./.github/logo-banner.svg">
 
-A high-performance [Matrix](https://matrix.org) Home-Server written in [Rust](rust-lang.org) designed to have a plugable storage engine, scalable, and light on resources.
+**Enterprise-grade, horizontally-scalable [Matrix](https://matrix.org) homeserver built in Rust.**
 
-General discussion for development is at [#maelstrom-server:matrix.org](https://matrix.to/#/#maelstrom-server:matrix.org)
+Maelstrom is a from-scratch Matrix homeserver designed for **clustered, high-availability deployments** from day one. It targets full **Matrix 2.0+** compliance (v1.18+) with dramatically lower resource usage than existing implementations.
+
+General discussion: [#maelstrom-server:matrix.org](https://matrix.to/#/#maelstrom-server:matrix.org)
 
 ## Project Status
 
-This is a brand new project under **daily** active development. It is not currently in usable form yet.
+**Active development** -- complete architectural rewrite in progress. Not yet usable for production.
 
-### Completed Features
+See [PROJECT.md](PROJECT.md) for the full development plan and phase tracking.
 
-You can review the [Closed `matrix-spec` Issues](https://github.com/maelstrom-rs/maelstrom/issues?q=is%3Aissue+is%3Aclosed+sort%3Acreated-asc+label%3Amatrix-spec+) in the issue tracker for a list of completed features.
+## Architecture
 
-## Project Goals
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Language | Rust (2024 edition) | Core implementation |
+| Web Framework | Axum | HTTP server, routing, middleware |
+| Database | SurrealDB v3 (TiKV backend) | Event graph, state, users, rooms |
+| Blob Storage | RustFS | S3-compatible media storage |
+| Deployment | Docker, Kubernetes, Helm | Container orchestration |
 
-1. Performance, both in terms of scale and minimal resources.
-2. From scratch design, no legacy architecture decisions.
-3. Support for embedded (Raspi, Jetson Nano, etc.) or clustered deployment with configurable storage engine (e.g. Postgres, Sqlite, Sled, etc.).
-4. First-class e2e encryption and p2p support (as Matrix.org works towards a direction).
-5. Designed for not only chat, but decentralized IoT use cases as well.
-6. SOCKS5 Proxy support to enable .onion homeservers ([Relevant Synapse Issue](https://github.com/matrix-org/synapse/issues/7088))
+### Design Principles
 
-## Why
+- **Stateless application layer** -- multiple Axum instances behind a load balancer, sharing one logical homeserver identity. Scale by adding nodes.
+- **Graph-first data model** -- Matrix's event DAG, room membership, and relations modeled as SurrealDB graph relations for fast traversal and state resolution.
+- **Storage trait abstraction** -- all database access through traits, enabling testability and future backend flexibility.
+- **Zero-copy and CoW patterns** -- performance-optimized serialization and string handling throughout.
 
-This project started due to a strong interest/support of Web 3.0 (decentralized web applications). Additionally,
-having a performant embeddable home server can enable a stronger usecase for decentralized IoT applications in addition to chat.
+### Workspace Layout
 
-## Building & Running
+```
+maelstrom/
+├── crates/
+│   ├── maelstrom-core/         # Core types, events, state resolution, errors
+│   ├── maelstrom-storage/      # Storage traits + SurrealDB implementation
+│   ├── maelstrom-media/        # Media handling via S3 (RustFS)
+│   ├── maelstrom-api/          # Client-Server API (Axum handlers)
+│   ├── maelstrom-federation/   # Server-Server API
+│   └── maelstrom-admin/        # Admin API and dashboard backend
+├── src/main.rs                 # Binary entry point
+├── tests/                      # Integration tests
+├── config/                     # Configuration files
+├── docker-compose.yml          # Full clustered stack (TiKV + SurrealDB + RustFS)
+└── docker-compose.dev.yml      # Lightweight local dev stack
+```
 
-### Using Rust
+## Quick Start
+
+### Prerequisites
+
+- Rust 1.85+ (2024 edition)
+- Docker and Docker Compose
+
+### Development (single-node)
 
 ```bash
-# install rust if needed
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# clone repo and cd
 git clone https://github.com/maelstrom-rs/maelstrom.git && cd maelstrom
 
-# copy .env-example and set with your specific settings
-cp Settings-example.yml Settings.yml
+# Start SurrealDB + RustFS for local development
+docker compose -f docker-compose.dev.yml up -d
 
-# build & run
+# Copy and edit configuration
+cp config/example.toml config/local.toml
+
+# Build and run
 cargo run --release
 ```
 
-### Generating the AUTH_KEY
+### Clustered (TiKV backend)
 
 ```bash
-openssl ecparam -genkey -name prime256v1 | openssl pkcs8 -topk8 -nocrypt -out ec_private.pem
+# Start full stack: PD + 3x TiKV + SurrealDB + RustFS
+docker compose up -d
+
+# Run Maelstrom (can run multiple instances behind a load balancer)
+cargo run --release
 ```
 
-Make sure you set AUTH_KEY_FILE to `path/to/ec_private.pem`
+### Running Tests
 
-## Technologies Used
+```bash
+# Unit and integration tests
+cargo test
 
-- [Actix-web](https://actix.rs) A high performance webserver written in Rust
-- [sqlx](https://github.com/launchbadge/sqlx) A rust version of the popular sqlx db library
-- [jwt](https://jwt.io)
-- [Ruma](https://github.com/ruma)
+# With full stack (federation, media, clustering tests)
+docker compose up -d
+cargo test --features integration
+```
 
-## Similar Projects
+## Administration
 
-The following are some other Rust based Home Server projects worth looking at:
+### Configuration
 
-- [Ruma](https://github.com/ruma) The server isn't maintained, but he client libraries appear so.
-- [Conduit](https://git.koesters.xyz/timo/conduit) A new Rust based Home Server under development.
+Maelstrom is configured via TOML files. See `config/example.toml` for all options.
+
+Key configuration areas:
+- **Server**: bind address, public hostname, max request size
+- **Database**: SurrealDB connection (endpoint, namespace, credentials)
+- **Media**: RustFS/S3 endpoint, bucket name, upload limits, retention policies
+- **Federation**: signing key paths, allow/deny lists
+- **Logging**: level, format (JSON for production, pretty for dev)
+
+### Docker Compose Services
+
+The `docker-compose.yml` provides a production-like clustered environment:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| `surrealdb` | 8000 | Database (connects to TiKV cluster) |
+| `pd` | 2379 | TiKV Placement Driver |
+| `tikv-0..2` | 20160+ | TiKV storage nodes (3-node Raft cluster) |
+| `rustfs` | 9000 | S3-compatible blob storage |
+
+### Health Checks
+
+- `GET /_health/live` -- liveness probe (server is running)
+- `GET /_health/ready` -- readiness probe (SurrealDB + RustFS connected)
+
+### Monitoring
+
+Maelstrom exports Prometheus metrics at `GET /metrics`:
+- Request latency and throughput by endpoint
+- Active sync connections
+- Federation queue depth and destination health
+- Database query latency
+- Media storage usage
+
+### Admin API
+
+The admin API (under `/_maelstrom/admin/v1/`) provides:
+- **User management**: list, create, suspend, lock, deactivate users
+- **Room management**: list, inspect, shutdown, purge rooms
+- **Media management**: usage stats, quarantine, retention policy enforcement
+- **Federation**: destination health, queue status, blocklists
+- **Reports**: abuse report management and actions
+
+Admin endpoints require an admin-level access token.
+
+## Matrix Spec Compliance
+
+Maelstrom targets **100% compliance** with the stable Matrix specification, validated through the [Complement](https://github.com/matrix-org/complement) black-box test suite.
+
+Target spec version: **Matrix v1.18+** including:
+- Sliding Sync (Matrix 2.0 core)
+- Threads, reactions, polls
+- Spaces and room hierarchy
+- End-to-end encryption (key management, cross-signing)
+- Federation with all major homeservers
+- Trust & safety (account suspension, invite blocking, policy servers)
 
 ## License
 
-Licensed under either of [Apache License](LICENSE-APACHE), Version
-2.0 or [MIT license](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in Maelstrom by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Maelstrom by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

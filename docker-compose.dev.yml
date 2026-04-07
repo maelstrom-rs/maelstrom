@@ -1,0 +1,43 @@
+# Lightweight local dev stack: SurrealDB standalone + RustFS single-node.
+# No TiKV cluster — uses SurrealDB's built-in SurrealKV storage.
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v3
+    ports:
+      - "8000:8000"
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=root
+      - surrealkv:///data/maelstrom.db
+    volumes:
+      - surrealdb_data:/data
+    healthcheck:
+      test: ["CMD", "surreal", "is-ready", "--conn", "http://localhost:8000"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      RUSTFS_ROOT_USER: maelstrom
+      RUSTFS_ROOT_PASSWORD: maelstrom-secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  surrealdb_data:
+  rustfs_data:

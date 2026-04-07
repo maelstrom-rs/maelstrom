@@ -1,0 +1,43 @@
+# Maelstrom Configuration
+#
+# Copy this file to config/local.toml and edit for your environment.
+# Alternatively, set MAELSTROM_CONFIG=/path/to/config.toml
+
+[server]
+# Address to bind the HTTP listener to
+bind_address = "0.0.0.0:8008"
+
+# Public-facing server name (used in Matrix user IDs: @user:server_name)
+server_name = "example.com"
+
+# Public base URL (used in .well-known and federation discovery)
+public_base_url = "https://matrix.example.com"
+
+[database]
+# SurrealDB connection endpoint
+# For local development: "ws://localhost:8000" or "mem://" (in-memory)
+# For file-based:        "rocksdb://data/maelstrom.db"
+# For TiKV cluster:      "ws://surrealdb:8000" (SurrealDB connects to TiKV)
+endpoint = "ws://localhost:8000"
+
+# Namespace and database name
+namespace = "maelstrom"
+database = "maelstrom"
+
+# Authentication credentials
+username = "root"
+password = "change-me-in-production"
+
+[media]
+# S3-compatible endpoint (RustFS)
+endpoint = "http://localhost:9000"
+
+# Bucket for all media storage
+bucket = "maelstrom-media"
+
+# S3 credentials
+access_key = "maelstrom"
+secret_key = "change-me-in-production"
+
+# AWS SDK region (required, use us-east-1 for S3-compatible stores)
+region = "us-east-1"

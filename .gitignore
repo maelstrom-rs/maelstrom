@@ -1,11 +1,27 @@
 /target
 **/*.rs.bk
 
-# misc
+# OS
 .DS_Store
+
+# Environment & secrets
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-Settings.yml
+.env.*
+*.pem
+
+# Config files (only example.toml is tracked)
+config/*.toml
+!config/example.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude
+
+# Product spec (internal)
+maelstrom-product-spec.md
+history.txt

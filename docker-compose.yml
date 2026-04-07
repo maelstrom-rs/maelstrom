@@ -1,0 +1,119 @@
+# Full clustered stack: TiKV (PD + 3 nodes) + SurrealDB + RustFS
+# Use for integration testing and staging environments.
+
+services:
+  # -- TiKV Placement Driver --
+  pd:
+    image: pingcap/pd:latest
+    ports:
+      - "2379:2379"
+    command:
+      - --name=pd
+      - --client-urls=http://0.0.0.0:2379
+      - --peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://pd:2379
+      - --advertise-peer-urls=http://pd:2380
+      - --data-dir=/data/pd
+    volumes:
+      - pd_data:/data/pd
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2379/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -- TiKV Storage Nodes --
+  tikv-0:
+    image: pingcap/tikv:latest
+    ports:
+      - "20160:20160"
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-0:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv0_data:/data/tikv
+    depends_on:
+      pd:
+        condition: service_healthy
+
+  tikv-1:
+    image: pingcap/tikv:latest
+    ports:
+      - "20161:20160"
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-1:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv1_data:/data/tikv
+    depends_on:
+      pd:
+        condition: service_healthy
+
+  tikv-2:
+    image: pingcap/tikv:latest
+    ports:
+      - "20162:20160"
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-2:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv2_data:/data/tikv
+    depends_on:
+      pd:
+        condition: service_healthy
+
+  # -- SurrealDB (connects to TiKV cluster) --
+  surrealdb:
+    image: surrealdb/surrealdb:v3
+    ports:
+      - "8000:8000"
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=root
+      - tikv://pd:2379
+    depends_on:
+      tikv-0:
+        condition: service_started
+      tikv-1:
+        condition: service_started
+      tikv-2:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "surreal", "is-ready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -- RustFS (S3-compatible media store) --
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      RUSTFS_ROOT_USER: maelstrom
+      RUSTFS_ROOT_PASSWORD: maelstrom-secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pd_data:
+  tikv0_data:
+  tikv1_data:
+  tikv2_data:
+  rustfs_data:

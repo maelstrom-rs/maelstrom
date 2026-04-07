@@ -1,0 +1,16 @@
+[package]
+name = "maelstrom-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }

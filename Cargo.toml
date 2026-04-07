@@ -1,33 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/maelstrom-core",
+    "crates/maelstrom-storage",
+    "crates/maelstrom-media",
+    "crates/maelstrom-api",
+    "crates/maelstrom-federation",
+    "crates/maelstrom-admin",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/maelstrom-rs/maelstrom"
+
+[workspace.dependencies]
+# Internal crates
+maelstrom-core = { path = "crates/maelstrom-core" }
+maelstrom-storage = { path = "crates/maelstrom-storage" }
+maelstrom-media = { path = "crates/maelstrom-media" }
+maelstrom-api = { path = "crates/maelstrom-api" }
+maelstrom-federation = { path = "crates/maelstrom-federation" }
+maelstrom-admin = { path = "crates/maelstrom-admin" }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Web
+axum = "0.8"
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "request-id", "util"] }
+http = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Database
+surrealdb = "3"
+
+# S3 / Media
+aws-sdk-s3 = "1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+
+# Crypto
+argon2 = "0.5"
+rand = "0.8"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+bytes = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
 [package]
 name = "maelstrom"
-version = "0.1.0"
-authors = ["Chris Bruce <chris@chrisbruce.com>", "Aiden McClelland <me@drbonez.dev>"]
-edition = "2018"
-
+edition.workspace = true
+version.workspace = true
+license.workspace = true
 
 [dependencies]
-actix-cors = "0.2.0"
-actix-http = "1.0.1"
-actix-ratelimit = "0.2"
-actix-service = "1.0.5"
-actix-rt = "1.0"
-actix-web = "2.0"
-anyhow = "1.0"
-async-trait = "0.1.30"
-config = { version = "0.10", default-features = false, features = [ "yaml" ] }
-env_logger = "0.7"
-futures = "0.3.4"
-futures-util = "0.3.4"
-jsonwebtoken = "7.1.0"
-lazy_static = "1.4.0"
-linear-map = { version = "1.2.0", features = ["serde_impl"] }
-log = { version = "0.4" }
-pem = "0.7.0"
-rand = "0.7.3"
-ring = "0.16.12"
-ruma-identifiers = {version = "0.15", features = [ "rand", "serde" ] }
-serde = "1.0"
-serde_json = "1.0"
-serde_urlencoded = "0.6.1"
-sqlx = { version = "0.3", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "sqlite" ] }
-uuid = { version = "0.8", features = ["serde", "v4"] }
+maelstrom-api = { workspace = true }
+maelstrom-admin = { workspace = true }
+maelstrom-core = { workspace = true }
+maelstrom-storage = { workspace = true }
+maelstrom-media = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+http = { workspace = true }
+tower = { workspace = true }
+chrono = { workspace = true }
