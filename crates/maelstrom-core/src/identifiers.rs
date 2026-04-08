@@ -53,12 +53,18 @@ impl UserId {
 
     /// The localpart (everything between `@` and `:`).
     pub fn localpart(&self) -> &str {
-        &self.0[1..self.0.find(':').unwrap_or(self.0.len())]
+        match self.0.find(':') {
+            Some(pos) => &self.0[1..pos],
+            None => &self.0[1..],
+        }
     }
 
     /// The server name (everything after the first `:`).
     pub fn server_name(&self) -> &str {
-        &self.0[self.0.find(':').unwrap_or(self.0.len()) + 1..]
+        match self.0.find(':') {
+            Some(pos) if pos + 1 < self.0.len() => &self.0[pos + 1..],
+            _ => "",
+        }
     }
 
     pub fn as_str(&self) -> &str {

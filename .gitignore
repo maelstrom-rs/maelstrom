@@ -19,8 +19,14 @@ config/*.toml
 *.swp
 *.swo
 
+# Local dev data (SurrealDB file-based mode, RustFS local storage)
+data/
+
+# Complement test results
+complement-results.json
+
 # Claude Code
-.claude
+.claude/
 
 # Product spec (internal)
 maelstrom-product-spec.md

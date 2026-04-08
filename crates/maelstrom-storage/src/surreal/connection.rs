@@ -43,7 +43,12 @@ impl SurrealStorage {
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         // Authenticate if not using an embedded engine
-        if !config.endpoint.starts_with("mem://") {
+        let is_embedded = config.endpoint.starts_with("mem://")
+            || config.endpoint == "memory"
+            || config.endpoint.starts_with("surrealkv://")
+            || config.endpoint.starts_with("rocksdb://")
+            || config.endpoint.starts_with("file://");
+        if !is_embedded {
             db.signin(Root {
                 username: config.username.clone(),
                 password: config.password.clone(),

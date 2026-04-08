@@ -6,7 +6,7 @@ services:
   pd:
     image: pingcap/pd:latest
     ports:
-      - "2379:2379"
+      - "2479:2379"
     command:
       - --name=pd
       - --client-urls=http://0.0.0.0:2379
@@ -26,7 +26,7 @@ services:
   tikv-0:
     image: pingcap/tikv:latest
     ports:
-      - "20160:20160"
+      - "20260:20160"
     command:
       - --addr=0.0.0.0:20160
       - --advertise-addr=tikv-0:20160
@@ -41,7 +41,7 @@ services:
   tikv-1:
     image: pingcap/tikv:latest
     ports:
-      - "20161:20160"
+      - "20261:20160"
     command:
       - --addr=0.0.0.0:20160
       - --advertise-addr=tikv-1:20160
@@ -56,7 +56,7 @@ services:
   tikv-2:
     image: pingcap/tikv:latest
     ports:
-      - "20162:20160"
+      - "20262:20160"
     command:
       - --addr=0.0.0.0:20160
       - --advertise-addr=tikv-2:20160
@@ -72,7 +72,7 @@ services:
   surrealdb:
     image: surrealdb/surrealdb:v3
     ports:
-      - "8000:8000"
+      - "8100:8000"
     command:
       - start
       - --log=info
@@ -97,8 +97,8 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9100:9000"
+      - "9101:9001"
     environment:
       RUSTFS_ROOT_USER: maelstrom
       RUSTFS_ROOT_PASSWORD: maelstrom-secret

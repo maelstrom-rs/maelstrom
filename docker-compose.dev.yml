@@ -1,11 +1,13 @@
-# Lightweight local dev stack: SurrealDB standalone + RustFS single-node.
+# Single-node dev stack: SurrealDB standalone + RustFS single-node.
 # No TiKV cluster — uses SurrealDB's built-in SurrealKV storage.
+# No NATS — single-node mode uses in-process notifications.
 
 services:
   surrealdb:
     image: surrealdb/surrealdb:v3
+    user: root
     ports:
-      - "8000:8000"
+      - "8100:8000"
     command:
       - start
       - --log=info
@@ -24,11 +26,13 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9100:9000"
+      - "9101:9001"
     environment:
-      RUSTFS_ROOT_USER: maelstrom
-      RUSTFS_ROOT_PASSWORD: maelstrom-secret
+      RUSTFS_ACCESS_KEY: maelstrom
+      RUSTFS_SECRET_KEY: maelstrom-secret
+      RUSTFS_VOLUMES: /data
+      RUSTFS_CONSOLE_ENABLE: "true"
     command: server /data --console-address ":9001"
     volumes:
       - rustfs_data:/data

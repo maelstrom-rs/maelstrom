@@ -1,0 +1,290 @@
+/* =============================================================
+   Maelstrom Admin Dashboard
+   Semantic CSS — no utility classes, CSS custom properties only
+   ============================================================= */
+
+:root {
+    --color-bg: #0f1117;
+    --color-surface: #1a1d27;
+    --color-surface-raised: #232733;
+    --color-border: #2e3340;
+    --color-text: #e1e4eb;
+    --color-text-muted: #8b90a0;
+    --color-primary: #6c8cff;
+    --color-primary-hover: #8ba3ff;
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --font-family-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-family-mono: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+    --font-size-base: 1rem;
+    --font-size-sm: 0.875rem;
+    --font-size-lg: 1.25rem;
+    --font-size-xl: 1.5rem;
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 1rem;
+    --spacing-lg: 1.5rem;
+    --spacing-xl: 2rem;
+    --radius: 0.5rem;
+    --transition: 150ms ease;
+    --max-width: 72rem;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --color-bg: #f8f9fb;
+        --color-surface: #ffffff;
+        --color-surface-raised: #f0f1f5;
+        --color-border: #d1d5db;
+        --color-text: #1f2937;
+        --color-text-muted: #6b7280;
+        --color-primary: #4f6df5;
+        --color-primary-hover: #3b5de7;
+    }
+}
+
+/* -- Reset -- */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* -- Base -- */
+
+body {
+    font-family: var(--font-family-body);
+    font-size: var(--font-size-base);
+    color: var(--color-text);
+    background-color: var(--color-bg);
+    line-height: 1.6;
+    min-height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+}
+
+/* -- Header -- */
+
+.site-header {
+    background-color: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    padding: var(--spacing-md) var(--spacing-xl);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xl);
+}
+
+.site-logo {
+    font-size: var(--font-size-lg);
+    font-weight: 700;
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+.site-nav ul {
+    display: flex;
+    gap: var(--spacing-lg);
+    list-style: none;
+}
+
+.site-nav a {
+    color: var(--color-text-muted);
+    text-decoration: none;
+    font-size: var(--font-size-sm);
+    transition: color var(--transition);
+}
+
+.site-nav a:hover,
+.site-nav a:focus-visible {
+    color: var(--color-text);
+}
+
+/* -- Main Content -- */
+
+main {
+    max-width: var(--max-width);
+    width: 100%;
+    margin: 0 auto;
+    padding: var(--spacing-xl);
+}
+
+h1 {
+    font-size: var(--font-size-xl);
+    margin-bottom: var(--spacing-lg);
+}
+
+h2 {
+    font-size: var(--font-size-lg);
+    margin-bottom: var(--spacing-md);
+    color: var(--color-text-muted);
+    font-weight: 500;
+}
+
+/* -- Status Grid (definition list) -- */
+
+.status-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--spacing-sm) var(--spacing-lg);
+    background-color: var(--color-surface);
+    padding: var(--spacing-lg);
+    border-radius: var(--radius);
+    border: 1px solid var(--color-border);
+}
+
+.status-grid dt {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.status-grid dd {
+    font-weight: 500;
+}
+
+.status-indicator[data-status="Healthy"] {
+    color: var(--color-success);
+}
+
+.status-indicator[data-status="Down"] {
+    color: var(--color-danger);
+}
+
+/* -- Sections -- */
+
+section {
+    margin-bottom: var(--spacing-xl);
+}
+
+article dl {
+    background-color: var(--color-surface);
+    padding: var(--spacing-lg);
+    border-radius: var(--radius);
+    border: 1px solid var(--color-border);
+}
+
+article dl dt {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    margin-top: var(--spacing-md);
+}
+
+article dl dt:first-child {
+    margin-top: 0;
+}
+
+article dl dd {
+    font-weight: 500;
+}
+
+/* -- Quick Actions -- */
+
+.quick-actions ul {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: var(--spacing-md);
+}
+
+.quick-actions a {
+    display: block;
+    padding: var(--spacing-lg);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    color: var(--color-text);
+    text-decoration: none;
+    font-weight: 500;
+    transition: border-color var(--transition), background-color var(--transition);
+}
+
+.quick-actions a:hover,
+.quick-actions a:focus-visible {
+    border-color: var(--color-primary);
+    background-color: var(--color-surface-raised);
+}
+
+/* -- Forms -- */
+
+fieldset {
+    border: none;
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: end;
+}
+
+legend {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--spacing-sm);
+}
+
+label {
+    display: block;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--spacing-xs);
+}
+
+input[type="search"],
+input[type="text"] {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: var(--spacing-sm) var(--spacing-md);
+    color: var(--color-text);
+    font-size: var(--font-size-base);
+    flex: 1;
+}
+
+input:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+
+button {
+    background-color: var(--color-primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color var(--transition);
+}
+
+button:hover,
+button:focus-visible {
+    background-color: var(--color-primary-hover);
+}
+
+/* -- Code -- */
+
+code {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    background-color: var(--color-surface-raised);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: 0.25rem;
+}
+
+/* -- Footer -- */
+
+.site-footer {
+    border-top: 1px solid var(--color-border);
+    padding: var(--spacing-md) var(--spacing-xl);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+/* -- Reduced Motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}

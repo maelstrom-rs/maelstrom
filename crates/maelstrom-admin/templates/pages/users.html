@@ -1,0 +1,26 @@
+{% extends "../base.html" %}
+
+{% block title %}Users{% endblock %}
+
+{% block content %}
+<article class="user-management">
+    <h1>User Management</h1>
+
+    <section class="user-search">
+        <h2>Search Users</h2>
+        <form data-on-submit="$$get('/_maelstrom/admin/v1/users')">
+            <fieldset>
+                <legend>Search</legend>
+                <label for="user-search-input">Username or User ID</label>
+                <input type="search" id="user-search-input" name="q" placeholder="@user:server or localpart">
+                <button type="submit">Search</button>
+            </fieldset>
+        </form>
+    </section>
+
+    <section class="user-list" id="user-results">
+        <h2>All Users</h2>
+        <p>Use the API endpoint <code>/_maelstrom/admin/v1/users</code> to list and manage users.</p>
+    </section>
+</article>
+{% endblock %}

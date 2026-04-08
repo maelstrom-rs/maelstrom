@@ -1,3 +1,4 @@
 pub mod client;
-
-// Upload, download, thumbnail, retention modules added in Phase 6.
+pub mod preview;
+pub mod retention;
+pub mod thumbnail;

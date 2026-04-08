@@ -1,0 +1,40 @@
+{% extends "../base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<article class="dashboard">
+    <h1>Server Overview</h1>
+
+    <section class="server-status">
+        <h2>Status</h2>
+        <dl class="status-grid">
+            <dt>Server Name</dt>
+            <dd>{{ server_name }}</dd>
+
+            <dt>Version</dt>
+            <dd>{{ version }}</dd>
+
+            <dt>Uptime</dt>
+            <dd><time>{{ uptime }}</time></dd>
+
+            <dt>Database</dt>
+            <dd class="status-indicator" data-status="{{ db_status }}">{{ db_status }}</dd>
+
+            <dt>Memory</dt>
+            <dd>{{ memory_used_mb }} MB / {{ memory_total_mb }} MB</dd>
+        </dl>
+    </section>
+
+    <section class="quick-actions">
+        <h2>Quick Actions</h2>
+        <nav aria-label="Admin actions">
+            <ul>
+                <li><a href="/_maelstrom/admin/users">Manage Users</a></li>
+                <li><a href="/_maelstrom/admin/rooms">Manage Rooms</a></li>
+                <li><a href="/_maelstrom/admin/federation">Federation Status</a></li>
+            </ul>
+        </nav>
+    </section>
+</article>
+{% endblock %}

@@ -81,6 +81,14 @@ impl MatrixError {
     pub fn exclusive(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, ErrorCode::Exclusive, msg)
     }
+
+    pub fn too_large(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::TooLarge, msg)
+    }
+
+    pub fn bad_alias(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, ErrorCode::BadAlias, msg)
+    }
 }
 
 impl IntoResponse for MatrixError {

@@ -2,7 +2,7 @@
 # Also used as the Complement test image (exposes 8008 + 8448).
 
 # -- Stage 1: Build --
-FROM rust:1.85-bookworm AS builder
+FROM rust:latest AS builder
 
 WORKDIR /build
 

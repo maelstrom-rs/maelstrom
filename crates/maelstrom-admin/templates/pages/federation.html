@@ -1,0 +1,25 @@
+{% extends "../base.html" %}
+
+{% block title %}Federation{% endblock %}
+
+{% block content %}
+<article class="federation-status">
+    <h1>Federation</h1>
+
+    <section class="federation-info">
+        <h2>Server Identity</h2>
+        <dl>
+            <dt>Server Name</dt>
+            <dd>{{ server_name }}</dd>
+
+            <dt>Signing Keys</dt>
+            <dd>{{ signing_key_count }} active</dd>
+        </dl>
+    </section>
+
+    <section class="federation-keys">
+        <h2>Key Server</h2>
+        <p>Public keys available at <a href="/_matrix/key/v2/server"><code>/_matrix/key/v2/server</code></a></p>
+    </section>
+</article>
+{% endblock %}

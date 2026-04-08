@@ -1,5 +1,7 @@
 use aws_sdk_s3::Client;
-use tracing::info;
+use aws_sdk_s3::primitives::ByteStream;
+use bytes::Bytes;
+use tracing::{debug, info};
 
 /// Configuration for the S3-compatible media store (RustFS).
 #[derive(Debug, Clone)]
@@ -105,6 +107,111 @@ impl MediaClient {
             .await
             .is_ok()
     }
+
+    /// Upload bytes to S3 with the given key and content type.
+    pub async fn upload(
+        &self,
+        key: &str,
+        data: Bytes,
+        content_type: &str,
+    ) -> Result<(), MediaError> {
+        debug!(key = %key, content_type = %content_type, size = data.len(), "Uploading to S3");
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(data))
+            .content_type(content_type)
+            .send()
+            .await
+            .map_err(|e| MediaError::Upload(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Download bytes from S3 by key.
+    pub async fn download(&self, key: &str) -> Result<DownloadResult, MediaError> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("NoSuchKey") || msg.contains("not found") {
+                    MediaError::NotFound(key.to_string())
+                } else {
+                    MediaError::Download(msg)
+                }
+            })?;
+
+        let content_type = output
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let content_length = output.content_length().unwrap_or(0) as u64;
+
+        let data = output
+            .body
+            .collect()
+            .await
+            .map_err(|e| MediaError::Download(e.to_string()))?
+            .into_bytes();
+
+        Ok(DownloadResult {
+            data,
+            content_type,
+            content_length,
+        })
+    }
+
+    /// Delete an object from S3 by key.
+    pub async fn delete(&self, key: &str) -> Result<(), MediaError> {
+        debug!(key = %key, "Deleting from S3");
+
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| MediaError::Upload(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Check if an object exists in S3.
+    pub async fn exists(&self, key: &str) -> Result<bool, MediaError> {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("NotFound") || msg.contains("404") || msg.contains("not found") {
+                    Ok(false)
+                } else {
+                    Err(MediaError::Download(msg))
+                }
+            }
+        }
+    }
+}
+
+/// Result of downloading a file from S3.
+pub struct DownloadResult {
+    pub data: Bytes,
+    pub content_type: String,
+    pub content_length: u64,
 }
 
 #[derive(Debug, thiserror::Error)]

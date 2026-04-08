@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Admin{% endblock %} - Maelstrom</title>
+    <meta name="description" content="Maelstrom Matrix Homeserver Admin Dashboard">
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="stylesheet" href="/_maelstrom/admin/static/css/admin.css">
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@starfederation/datastar"></script>
+</head>
+<body>
+    <header class="site-header">
+        <a href="/_maelstrom/admin/" class="site-logo">Maelstrom Admin</a>
+        <nav class="site-nav" aria-label="Main navigation">
+            <ul>
+                <li><a href="/_maelstrom/admin/">Dashboard</a></li>
+                <li><a href="/_maelstrom/admin/users">Users</a></li>
+                <li><a href="/_maelstrom/admin/rooms">Rooms</a></li>
+                <li><a href="/_maelstrom/admin/federation">Federation</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p>Maelstrom Matrix Homeserver</p>
+    </footer>
+</body>
+</html>

@@ -28,7 +28,7 @@ jobs:
         run: cargo build --all-targets
 
   test:
-    name: Test
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +36,66 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --all
+
+  complement:
+    name: Complement
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Complement image
+        run: docker build -t complement-maelstrom -f Dockerfile.complement .
+
+      - name: Clone Complement
+        run: git clone --depth=1 https://github.com/matrix-org/complement.git ../complement
+
+      - name: Run Complement CS API tests
+        id: complement
+        continue-on-error: true
+        env:
+          COMPLEMENT_BASE_IMAGE: complement-maelstrom
+        run: |
+          cd ../complement
+          go test -json -count=1 -timeout 30m ./tests/csapi/... > $GITHUB_WORKSPACE/complement-results.json 2>&1 || true
+
+      - name: Generate report
+        if: always()
+        run: |
+          if [ -f complement-results.json ]; then
+            python3 -c "
+          import json, sys
+          results = {}
+          with open('complement-results.json') as f:
+              for line in f:
+                  try:
+                      d = json.loads(line)
+                  except:
+                      continue
+                  test = d.get('Test')
+                  action = d.get('Action')
+                  if test and action in ('pass', 'fail', 'skip'):
+                      results[test] = action
+          passed = sum(1 for a in results.values() if a == 'pass')
+          failed = sum(1 for a in results.values() if a == 'fail')
+          total = len(results)
+          rate = f'{passed/total*100:.1f}%' if total > 0 else '0%'
+          print(f'Complement: {passed}/{total} passed ({rate})')
+          print(f'  Passed: {passed}')
+          print(f'  Failed: {failed}')
+          print(f'  Total:  {total}')
+          "
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: complement-results
+          path: complement-results.json
+          if-no-files-found: ignore
