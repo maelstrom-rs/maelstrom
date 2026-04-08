@@ -7,7 +7,7 @@ use http::StatusCode;
 #[tokio::test]
 async fn test_send_reaction_and_get_relations() {
     let router = common::test_router();
-    let (token, user_id, _) = common::register_user(&router, "reactor", "pass").await;
+    let (token, _user_id, _) = common::register_user(&router, "reactor", "pass").await;
 
     // Create a room
     let body = serde_json::json!({"preset": "public_chat"});

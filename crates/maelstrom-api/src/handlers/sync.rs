@@ -548,14 +548,31 @@ async fn build_incremental_sync(
     // Use a HashSet for O(1) membership checks instead of Vec::contains O(n)
     let joined_set: HashSet<&str> = joined_rooms.iter().map(|s| s.as_str()).collect();
 
-    // Detect newly-joined rooms: rooms where the user has a join event since `since`
+    // Detect newly-joined rooms: rooms where the user transitioned to "join" since `since`.
+    // A m.room.member event with membership=join is only "newly joined" if the user was
+    // NOT already joined at the since position (i.e. profile-only updates don't count).
     let mut newly_joined: HashSet<String> = HashSet::new();
     for event in &new_events {
         if event.event_type == "m.room.member"
             && event.state_key.as_deref() == Some(user_id)
             && event.content.get("membership").and_then(|m| m.as_str()) == Some("join")
         {
-            newly_joined.insert(event.room_id.clone());
+            // Check if the user was already joined at the since position
+            let was_joined = storage
+                .get_state_event_at(&event.room_id, "m.room.member", user_id, since)
+                .await
+                .ok()
+                .and_then(|e| {
+                    e.content
+                        .get("membership")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                == Some("join".to_string());
+
+            if !was_joined {
+                newly_joined.insert(event.room_id.clone());
+            }
         }
     }
 

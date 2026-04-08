@@ -4,10 +4,12 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use maelstrom_core::error::MatrixError;
+use maelstrom_core::events::pdu::{StoredEvent, generate_event_id, timestamp_ms};
 use maelstrom_core::identifiers::UserId;
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
+use crate::notify::Notification;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -72,6 +74,9 @@ async fn put_displayname(
         .await
         .map_err(crate::extractors::storage_error)?;
 
+    // Emit updated m.room.member events in all joined rooms
+    propagate_profile_to_rooms(&state, auth.user_id.as_ref()).await;
+
     Ok(Json(serde_json::json!({})))
 }
 
@@ -123,6 +128,9 @@ async fn put_avatar_url(
         .set_avatar_url(auth.user_id.localpart(), body.avatar_url.as_deref())
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // Emit updated m.room.member events in all joined rooms
+    propagate_profile_to_rooms(&state, auth.user_id.as_ref()).await;
 
     Ok(Json(serde_json::json!({})))
 }
@@ -178,4 +186,95 @@ fn verify_profile_owner(auth: &AuthenticatedUser, target_user_id: &str) -> Resul
         ));
     }
     Ok(())
+}
+
+/// After a profile change, emit new m.room.member state events in every joined room
+/// so that the updated displayname/avatar_url appears in sync responses.
+async fn propagate_profile_to_rooms(state: &AppState, user_id: &str) {
+    let storage = state.storage();
+
+    let rooms = match storage.get_joined_rooms(user_id).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    // Fetch updated profile
+    let localpart = match extract_localpart(user_id) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let profile = storage.get_profile(&localpart).await.ok();
+
+    for room_id in rooms {
+        // Get current m.room.member state to preserve membership and other fields
+        let existing_content = storage
+            .get_state_event(&room_id, "m.room.member", user_id)
+            .await
+            .map(|e| e.content)
+            .unwrap_or_else(|_| serde_json::json!({"membership": "join"}));
+
+        // Build updated content with new profile fields
+        let mut content = existing_content.clone();
+        if let Some(obj) = content.as_object_mut() {
+            match profile.as_ref().and_then(|p| p.display_name.as_deref()) {
+                Some(name) => {
+                    obj.insert(
+                        "displayname".to_string(),
+                        serde_json::Value::String(name.to_string()),
+                    );
+                }
+                None => {
+                    obj.remove("displayname");
+                }
+            }
+            match profile.as_ref().and_then(|p| p.avatar_url.as_deref()) {
+                Some(url) => {
+                    obj.insert(
+                        "avatar_url".to_string(),
+                        serde_json::Value::String(url.to_string()),
+                    );
+                }
+                None => {
+                    obj.remove("avatar_url");
+                }
+            }
+        }
+
+        // Skip if content hasn't actually changed
+        if content == existing_content {
+            continue;
+        }
+
+        let event_id = generate_event_id();
+        let event = StoredEvent {
+            event_id: event_id.clone(),
+            room_id: room_id.clone(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: Some(user_id.to_string()),
+            content,
+            origin_server_ts: timestamp_ms(),
+            unsigned: None,
+            stream_position: 0,
+            origin: None,
+            auth_events: None,
+            prev_events: None,
+            depth: None,
+            hashes: None,
+            signatures: None,
+        };
+
+        if storage.store_event(&event).await.is_ok() {
+            let _ = storage
+                .set_room_state(&room_id, "m.room.member", user_id, &event_id)
+                .await;
+
+            state
+                .notifier()
+                .notify(Notification::RoomEvent {
+                    room_id: room_id.clone(),
+                })
+                .await;
+        }
+    }
 }

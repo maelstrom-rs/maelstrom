@@ -35,7 +35,7 @@ async fn test_upload_device_keys() {
 #[tokio::test]
 async fn test_upload_one_time_keys() {
     let router = common::test_router();
-    let (token, _, device_id) = common::register_user(&router, "otkuser", "pass").await;
+    let (token, _, _device_id) = common::register_user(&router, "otkuser", "pass").await;
 
     let keys = serde_json::json!({
         "one_time_keys": {
@@ -88,7 +88,7 @@ async fn test_query_device_keys() {
 #[tokio::test]
 async fn test_claim_one_time_keys() {
     let router = common::test_router();
-    let (token1, user_id1, device_id1) = common::register_user(&router, "claimer", "pass").await;
+    let (token1, _user_id1, _device_id1) = common::register_user(&router, "claimer", "pass").await;
     let (token2, user_id2, device_id2) = common::register_user(&router, "claimee", "pass").await;
 
     // User2 uploads OTKs

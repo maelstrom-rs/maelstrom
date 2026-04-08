@@ -332,38 +332,43 @@ async fn do_set_state(
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
-    // Check power levels — user must have sufficient PL to send this state event
-    let power_levels = storage
-        .get_state_event(room_id, "m.room.power_levels", "")
-        .await
-        .ok();
+    // Check power levels — user must have sufficient PL to send this state event.
+    // Exception: users can always update their own m.room.member event (profile changes).
+    let is_own_member_event = event_type == "m.room.member" && state_key == sender;
 
-    if let Some(ref pl_event) = power_levels {
-        let user_pl = pl_event
-            .content
-            .get("users")
-            .and_then(|u| u.get(&sender))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+    if !is_own_member_event {
+        let power_levels = storage
+            .get_state_event(room_id, "m.room.power_levels", "")
+            .await
+            .ok();
 
-        // For state events, required PL comes from events[event_type], or state_default
-        let required_pl = pl_event
-            .content
-            .get("events")
-            .and_then(|ev| ev.get(event_type))
-            .and_then(|v| v.as_i64())
-            .or_else(|| {
-                pl_event
-                    .content
-                    .get("state_default")
-                    .and_then(|v| v.as_i64())
-            })
-            .unwrap_or(50);
+        if let Some(ref pl_event) = power_levels {
+            let user_pl = pl_event
+                .content
+                .get("users")
+                .and_then(|u| u.get(&sender))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
 
-        if user_pl < required_pl {
-            return Err(MatrixError::forbidden(format!(
-                "Insufficient power level: need {required_pl}, have {user_pl}"
-            )));
+            // For state events, required PL comes from events[event_type], or state_default
+            let required_pl = pl_event
+                .content
+                .get("events")
+                .and_then(|ev| ev.get(event_type))
+                .and_then(|v| v.as_i64())
+                .or_else(|| {
+                    pl_event
+                        .content
+                        .get("state_default")
+                        .and_then(|v| v.as_i64())
+                })
+                .unwrap_or(50);
+
+            if user_pl < required_pl {
+                return Err(MatrixError::forbidden(format!(
+                    "Insufficient power level: need {required_pl}, have {user_pl}"
+                )));
+            }
         }
     }
 
