@@ -68,10 +68,7 @@ async fn receive_transaction(
             }
             Err(e) => {
                 warn!(event_id = %event_id, error = %e, "Failed to process PDU");
-                pdu_results.insert(
-                    event_id,
-                    serde_json::json!({ "error": e.to_string() }),
-                );
+                pdu_results.insert(event_id, serde_json::json!({ "error": e.to_string() }));
             }
         }
     }
@@ -139,20 +136,30 @@ async fn process_pdu(
         room_id: room_id.to_string(),
         sender: sender.to_string(),
         event_type: event_type.to_string(),
-        state_key: pdu_json.get("state_key").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        state_key: pdu_json
+            .get("state_key")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
         content,
         origin_server_ts,
         unsigned: pdu_json.get("unsigned").cloned(),
         stream_position: 0, // Will be set by store_event
-        origin: pdu_json.get("origin").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        origin: pdu_json
+            .get("origin")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
         auth_events: pdu_json.get("auth_events").and_then(|a| {
             a.as_array().map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
             })
         }),
         prev_events: pdu_json.get("prev_events").and_then(|a| {
             a.as_array().map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
             })
         }),
         depth: pdu_json.get("depth").and_then(|d| d.as_i64()),
@@ -161,14 +168,10 @@ async fn process_pdu(
     };
 
     // Store the event
-    state
-        .storage()
-        .store_event(&stored)
-        .await
-        .map_err(|e| {
-            tracing::error!(event_id = %event_id, error = %e, "Failed to store federated event");
-            MatrixError::unknown("Failed to store event")
-        })?;
+    state.storage().store_event(&stored).await.map_err(|e| {
+        tracing::error!(event_id = %event_id, error = %e, "Failed to store federated event");
+        MatrixError::unknown("Failed to store event")
+    })?;
 
     // If it's a state event, update room state
     if let Some(state_key) = &stored.state_key {
@@ -184,37 +187,65 @@ async fn process_pdu(
 
 /// Process an inbound EDU (Ephemeral Data Unit).
 async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
-    let edu_type = edu.get("edu_type").and_then(|e| e.as_str()).unwrap_or("unknown");
+    let edu_type = edu
+        .get("edu_type")
+        .and_then(|e| e.as_str())
+        .unwrap_or("unknown");
     let content = edu.get("content").cloned().unwrap_or(serde_json::json!({}));
 
     match edu_type {
         "m.typing" => {
-            let room_id = content.get("room_id").and_then(|r| r.as_str()).unwrap_or_default();
-            let user_id = content.get("user_id").and_then(|u| u.as_str()).unwrap_or_default();
-            let typing = content.get("typing").and_then(|t| t.as_bool()).unwrap_or(false);
+            let room_id = content
+                .get("room_id")
+                .and_then(|r| r.as_str())
+                .unwrap_or_default();
+            let user_id = content
+                .get("user_id")
+                .and_then(|u| u.as_str())
+                .unwrap_or_default();
+            let typing = content
+                .get("typing")
+                .and_then(|t| t.as_bool())
+                .unwrap_or(false);
             debug!(room_id = %room_id, user_id = %user_id, typing = typing, "Federation typing EDU");
-            state.ephemeral().set_typing(user_id, room_id, typing, 30_000);
+            state
+                .ephemeral()
+                .set_typing(user_id, room_id, typing, 30_000);
         }
         "m.presence" => {
             if let Some(push) = content.get("push").and_then(|p| p.as_array()) {
                 for entry in push {
-                    let user_id = entry.get("user_id").and_then(|u| u.as_str()).unwrap_or_default();
-                    let presence = entry.get("presence").and_then(|p| p.as_str()).unwrap_or("offline");
+                    let user_id = entry
+                        .get("user_id")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or_default();
+                    let presence = entry
+                        .get("presence")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("offline");
                     let status_msg = entry.get("status_msg").and_then(|s| s.as_str());
                     debug!(user_id = %user_id, presence = %presence, "Federation presence EDU");
-                    state.ephemeral().set_presence(user_id, presence, status_msg);
+                    state
+                        .ephemeral()
+                        .set_presence(user_id, presence, status_msg);
                 }
             }
         }
         "m.receipt" => {
-            let room_id = content.get("room_id").and_then(|r| r.as_str()).unwrap_or_default();
+            let room_id = content
+                .get("room_id")
+                .and_then(|r| r.as_str())
+                .unwrap_or_default();
             if let Some(receipts) = content.get("m.read").and_then(|r| r.as_object()) {
                 for (event_id, data) in receipts {
                     if let Some(user_ids) = data.get("user_ids").and_then(|u| u.as_array()) {
                         for uid in user_ids {
                             if let Some(user_id) = uid.as_str() {
                                 debug!(room_id = %room_id, user_id = %user_id, event_id = %event_id, "Federation receipt EDU");
-                                let _ = state.storage().set_receipt(user_id, room_id, "m.read", event_id).await;
+                                let _ = state
+                                    .storage()
+                                    .set_receipt(user_id, room_id, "m.read", event_id)
+                                    .await;
                             }
                         }
                     }
@@ -224,11 +255,20 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
         "m.device_list_update" => {
             // Device list updates inform us a remote user's device keys changed.
             // We invalidate our cache by storing the updated keys if provided.
-            let user_id = content.get("user_id").and_then(|u| u.as_str()).unwrap_or_default();
-            let device_id = content.get("device_id").and_then(|d| d.as_str()).unwrap_or_default();
+            let user_id = content
+                .get("user_id")
+                .and_then(|u| u.as_str())
+                .unwrap_or_default();
+            let device_id = content
+                .get("device_id")
+                .and_then(|d| d.as_str())
+                .unwrap_or_default();
             debug!(user_id = %user_id, device_id = %device_id, "Federation device list update EDU");
             if let Some(keys) = content.get("keys") {
-                let _ = state.storage().set_device_keys(user_id, device_id, keys).await;
+                let _ = state
+                    .storage()
+                    .set_device_keys(user_id, device_id, keys)
+                    .await;
             }
         }
         other => {

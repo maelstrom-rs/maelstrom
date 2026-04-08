@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use maelstrom_core::error::MatrixError;
 use maelstrom_core::events::pdu::{
-    default_power_levels, generate_event_id, generate_room_id, timestamp_ms, StoredEvent,
+    StoredEvent, default_power_levels, generate_event_id, generate_room_id, timestamp_ms,
 };
 use maelstrom_storage::traits::StorageError;
 
@@ -20,31 +20,16 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/client/v3/join/{roomIdOrAlias}",
             post(join_room_by_alias),
         )
-        .route(
-            "/_matrix/client/v3/rooms/{roomId}/join",
-            post(join_room),
-        )
-        .route(
-            "/_matrix/client/v3/rooms/{roomId}/leave",
-            post(leave_room),
-        )
+        .route("/_matrix/client/v3/rooms/{roomId}/join", post(join_room))
+        .route("/_matrix/client/v3/rooms/{roomId}/leave", post(leave_room))
         .route(
             "/_matrix/client/v3/rooms/{roomId}/invite",
             post(invite_to_room),
         )
         .route("/_matrix/client/v3/joined_rooms", get(joined_rooms))
-        .route(
-            "/_matrix/client/v3/rooms/{roomId}/kick",
-            post(kick_user),
-        )
-        .route(
-            "/_matrix/client/v3/rooms/{roomId}/ban",
-            post(ban_user),
-        )
-        .route(
-            "/_matrix/client/v3/rooms/{roomId}/unban",
-            post(unban_user),
-        )
+        .route("/_matrix/client/v3/rooms/{roomId}/kick", post(kick_user))
+        .route("/_matrix/client/v3/rooms/{roomId}/ban", post(ban_user))
+        .route("/_matrix/client/v3/rooms/{roomId}/unban", post(unban_user))
         .route(
             "/_matrix/client/v3/rooms/{roomId}/forget",
             post(forget_room),
@@ -328,9 +313,7 @@ async fn create_room(
     if let Some(alias_name) = &body.room_alias_name {
         let full_alias = format!("#{}:{}", alias_name, server_name);
         // Best-effort alias creation; ignore duplicates
-        let _ = storage
-            .set_room_alias(&full_alias, &room_id, &sender)
-            .await;
+        let _ = storage.set_room_alias(&full_alias, &room_id, &sender).await;
 
         // Set canonical alias state event
         store_state_event(
@@ -410,20 +393,22 @@ async fn do_join(
     let sender = auth.user_id.to_string();
 
     // Check room exists
-    storage
-        .get_room(room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::not_found("Room not found"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    storage.get_room(room_id).await.map_err(|e| match e {
+        StorageError::NotFound => MatrixError::not_found("Room not found"),
+        other => crate::extractors::storage_error(other),
+    })?;
 
     // Check join rules
     let join_rule = storage
         .get_state_event(room_id, "m.room.join_rules", "")
         .await
         .ok()
-        .and_then(|e| e.content.get("join_rule").and_then(|j| j.as_str()).map(|s| s.to_string()))
+        .and_then(|e| {
+            e.content
+                .get("join_rule")
+                .and_then(|j| j.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "invite".to_string());
 
     // Check current membership
@@ -431,9 +416,12 @@ async fn do_join(
 
     // Idempotent join: if already joined, return existing member event_id
     if current_membership.as_deref() == Some("join")
-        && let Ok(_existing) = storage.get_state_event(room_id, "m.room.member", &sender).await {
-            return Ok(Json(serde_json::json!({ "room_id": room_id })));
-        }
+        && let Ok(_existing) = storage
+            .get_state_event(room_id, "m.room.member", &sender)
+            .await
+    {
+        return Ok(Json(serde_json::json!({ "room_id": room_id })));
+    }
 
     if join_rule == "invite" || join_rule == "knock" {
         // Must be invited to join
@@ -981,7 +969,10 @@ async fn upgrade_room(
     .await?;
 
     // Copy key state from old room to new room
-    let old_state = storage.get_current_state(&old_room_id).await.unwrap_or_default();
+    let old_state = storage
+        .get_current_state(&old_room_id)
+        .await
+        .unwrap_or_default();
     for event in &old_state {
         // Copy join_rules, history_visibility, power_levels, name, topic, etc.
         // Skip m.room.create (already set), m.room.member (will be handled), m.room.tombstone

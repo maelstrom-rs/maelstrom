@@ -119,31 +119,47 @@ async fn send_join(
         room_id: params.room_id.clone(),
         sender: sender.clone(),
         event_type: event_type.to_string(),
-        state_key: event_json.get("state_key").and_then(|s| s.as_str()).map(|s| s.to_string()),
-        content: event_json.get("content").cloned().unwrap_or(serde_json::json!({})),
-        origin_server_ts: event_json.get("origin_server_ts").and_then(|t| t.as_u64()).unwrap_or(0),
+        state_key: event_json
+            .get("state_key")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
+        content: event_json
+            .get("content")
+            .cloned()
+            .unwrap_or(serde_json::json!({})),
+        origin_server_ts: event_json
+            .get("origin_server_ts")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0),
         unsigned: None,
         stream_position: 0,
-        origin: event_json.get("origin").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        origin: event_json
+            .get("origin")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
         auth_events: event_json.get("auth_events").and_then(|a| {
-            a.as_array().map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            a.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
         }),
         prev_events: event_json.get("prev_events").and_then(|a| {
-            a.as_array().map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            a.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
         }),
         depth: event_json.get("depth").and_then(|d| d.as_i64()),
         hashes: event_json.get("hashes").cloned(),
         signatures: event_json.get("signatures").cloned(),
     };
 
-    state
-        .storage()
-        .store_event(&stored)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to store join event");
-            MatrixError::unknown("Failed to store event")
-        })?;
+    state.storage().store_event(&stored).await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to store join event");
+        MatrixError::unknown("Failed to store event")
+    })?;
 
     // Update membership
     state
@@ -258,10 +274,16 @@ async fn send_leave(
         event_type: "m.room.member".to_string(),
         state_key: Some(sender.clone()),
         content: serde_json::json!({ "membership": "leave" }),
-        origin_server_ts: event_json.get("origin_server_ts").and_then(|t| t.as_u64()).unwrap_or(0),
+        origin_server_ts: event_json
+            .get("origin_server_ts")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0),
         unsigned: None,
         stream_position: 0,
-        origin: event_json.get("origin").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        origin: event_json
+            .get("origin")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
         auth_events: None,
         prev_events: None,
         depth: event_json.get("depth").and_then(|d| d.as_i64()),
@@ -287,14 +309,20 @@ async fn send_leave(
 }
 
 /// Get auth event IDs for a room (create, join_rules, power_levels events).
-async fn get_auth_event_ids(storage: &dyn maelstrom_storage::traits::Storage, room_id: &str) -> Vec<String> {
+async fn get_auth_event_ids(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+) -> Vec<String> {
     let mut ids = Vec::new();
     for (event_type, state_key) in [
         ("m.room.create", ""),
         ("m.room.join_rules", ""),
         ("m.room.power_levels", ""),
     ] {
-        if let Ok(event) = storage.get_state_event(room_id, event_type, state_key).await {
+        if let Ok(event) = storage
+            .get_state_event(room_id, event_type, state_key)
+            .await
+        {
             ids.push(event.event_id);
         }
     }
@@ -302,10 +330,14 @@ async fn get_auth_event_ids(storage: &dyn maelstrom_storage::traits::Storage, ro
 }
 
 /// Get the latest event IDs in a room (simplified: last 2 events by stream position).
-async fn get_latest_event_ids(storage: &dyn maelstrom_storage::traits::Storage, room_id: &str) -> Vec<String> {
+async fn get_latest_event_ids(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+) -> Vec<String> {
     if let Ok(pos) = storage.current_stream_position().await
-        && let Ok(events) = storage.get_room_events(room_id, pos + 1, 2, "b").await {
-            return events.into_iter().map(|e| e.event_id).collect();
-        }
+        && let Ok(events) = storage.get_room_events(room_id, pos + 1, 2, "b").await
+    {
+        return events.into_iter().map(|e| e.event_id).collect();
+    }
     Vec::new()
 }

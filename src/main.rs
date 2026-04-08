@@ -177,9 +177,11 @@ async fn main() -> Result<()> {
         if let Some(key_record) = keys.first() {
             use base64::Engine;
             let engine = base64::engine::general_purpose::STANDARD_NO_PAD;
-            let private_bytes = engine.decode(&key_record.private_key)
+            let private_bytes = engine
+                .decode(&key_record.private_key)
                 .context("Invalid stored private key")?;
-            let key_bytes: [u8; 32] = private_bytes.try_into()
+            let key_bytes: [u8; 32] = private_bytes
+                .try_into()
                 .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
             info!(key_id = %key_record.key_id, "Loaded existing signing key");
             maelstrom_core::signatures::keys::KeyPair::from_bytes(
@@ -197,7 +199,9 @@ async fn main() -> Result<()> {
                 private_key: engine.encode(kp.private_key_bytes()),
                 valid_until: chrono::Utc::now() + chrono::Duration::days(365),
             };
-            storage.store_server_key(&record).await
+            storage
+                .store_server_key(&record)
+                .await
                 .context("Failed to store signing key")?;
             info!(key_id = %kp.key_id(), "Generated new signing key");
             kp
@@ -223,11 +227,8 @@ async fn main() -> Result<()> {
             .unwrap_or_default()
             .as_secs();
 
-        let node_id = chitchat::ChitchatId::new(
-            config.server.server_name.clone(),
-            generation,
-            listen_addr,
-        );
+        let node_id =
+            chitchat::ChitchatId::new(config.server.server_name.clone(), generation, listen_addr);
 
         let chitchat_config = chitchat::ChitchatConfig {
             chitchat_id: node_id,
@@ -244,13 +245,10 @@ async fn main() -> Result<()> {
         let (store, delta_rx) = maelstrom_core::ephemeral::EphemeralStore::with_gossip();
         let ephemeral = std::sync::Arc::new(store);
 
-        let chitchat_handle = chitchat::spawn_chitchat(
-            chitchat_config,
-            vec![],
-            &chitchat::transport::UdpTransport,
-        )
-        .await
-        .context("Failed to start chitchat gossip")?;
+        let chitchat_handle =
+            chitchat::spawn_chitchat(chitchat_config, vec![], &chitchat::transport::UdpTransport)
+                .await
+                .context("Failed to start chitchat gossip")?;
 
         let bridge = maelstrom_api::gossip::start(
             &chitchat_handle,
@@ -268,8 +266,7 @@ async fn main() -> Result<()> {
 
         (ephemeral, Some((chitchat_handle, bridge)))
     } else {
-        let ephemeral =
-            std::sync::Arc::new(maelstrom_core::ephemeral::EphemeralStore::new());
+        let ephemeral = std::sync::Arc::new(maelstrom_core::ephemeral::EphemeralStore::new());
         info!("Single-node mode (no [cluster] config)");
         (ephemeral, None)
     };
@@ -284,11 +281,15 @@ async fn main() -> Result<()> {
     let federation_router = maelstrom_federation::router::build(federation_state);
 
     // Build admin state and router (with retention config for management)
-    let admin_retention = config.media.as_ref().map(|m| maelstrom_admin::RetentionConfig {
-        max_age_days: m.max_age_days,
-        sweep_interval_secs: m.sweep_interval_secs,
-        batch_size: 500,
-    }).unwrap_or_default();
+    let admin_retention = config
+        .media
+        .as_ref()
+        .map(|m| maelstrom_admin::RetentionConfig {
+            max_age_days: m.max_age_days,
+            sweep_interval_secs: m.sweep_interval_secs,
+            batch_size: 500,
+        })
+        .unwrap_or_default();
     let admin_state = maelstrom_admin::AdminState::with_retention(
         storage.clone(),
         server_name.clone(),
@@ -329,22 +330,20 @@ async fn main() -> Result<()> {
         "Listening for connections"
     );
 
-    axum::serve(listener, app)
-        .await
-        .context("Server error")?;
+    axum::serve(listener, app).await.context("Server error")?;
 
     Ok(())
 }
 
 fn load_config() -> Result<Config> {
-    let config_path = std::env::var("MAELSTROM_CONFIG")
-        .unwrap_or_else(|_| "config/local.toml".to_string());
+    let config_path =
+        std::env::var("MAELSTROM_CONFIG").unwrap_or_else(|_| "config/local.toml".to_string());
 
     let content = std::fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config file: {config_path}"))?;
 
-    let config: Config =
-        toml::from_str(&content).with_context(|| format!("Failed to parse config: {config_path}"))?;
+    let config: Config = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse config: {config_path}"))?;
 
     Ok(config)
 }

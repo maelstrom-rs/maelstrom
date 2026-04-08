@@ -10,18 +10,12 @@ use crate::FederationState;
 
 pub fn routes() -> Router<FederationState> {
     Router::new()
-        .route(
-            "/_matrix/federation/v1/state/{roomId}",
-            get(get_room_state),
-        )
+        .route("/_matrix/federation/v1/state/{roomId}", get(get_room_state))
         .route(
             "/_matrix/federation/v1/state_ids/{roomId}",
             get(get_room_state_ids),
         )
-        .route(
-            "/_matrix/federation/v1/event/{eventId}",
-            get(get_event),
-        )
+        .route("/_matrix/federation/v1/event/{eventId}", get(get_event))
 }
 
 #[derive(Deserialize)]

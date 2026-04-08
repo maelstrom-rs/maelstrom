@@ -394,7 +394,9 @@ impl RoomStore for SurrealStorage {
             for row in &state_rows {
                 let event_type = row.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
                 let event_id = row.get("event_id").and_then(|v| v.as_str()).unwrap_or("");
-                if event_id.is_empty() { continue; }
+                if event_id.is_empty() {
+                    continue;
+                }
 
                 // Fetch the event content
                 let mut ev_resp = self
@@ -409,16 +411,28 @@ impl RoomStore for SurrealStorage {
 
                 match event_type {
                     "m.room.name" => {
-                        name = content.and_then(|c| c.get("name")).and_then(|n| n.as_str()).map(|s| s.to_string());
+                        name = content
+                            .and_then(|c| c.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string());
                     }
                     "m.room.topic" => {
-                        topic = content.and_then(|c| c.get("topic")).and_then(|t| t.as_str()).map(|s| s.to_string());
+                        topic = content
+                            .and_then(|c| c.get("topic"))
+                            .and_then(|t| t.as_str())
+                            .map(|s| s.to_string());
                     }
                     "m.room.canonical_alias" => {
-                        canonical_alias = content.and_then(|c| c.get("alias")).and_then(|a| a.as_str()).map(|s| s.to_string());
+                        canonical_alias = content
+                            .and_then(|c| c.get("alias"))
+                            .and_then(|a| a.as_str())
+                            .map(|s| s.to_string());
                     }
                     "m.room.avatar" => {
-                        avatar_url = content.and_then(|c| c.get("url")).and_then(|u| u.as_str()).map(|s| s.to_string());
+                        avatar_url = content
+                            .and_then(|c| c.get("url"))
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string());
                     }
                     _ => {}
                 }
@@ -433,15 +447,22 @@ impl RoomStore for SurrealStorage {
                 .map_err(|e| StorageError::Query(e.to_string()))?;
 
             let count_rows: Vec<serde_json::Value> = count_resp.take(0).unwrap_or_default();
-            let num_joined = count_rows.first()
+            let num_joined = count_rows
+                .first()
                 .and_then(|v| v.get("total"))
                 .and_then(|t| t.as_u64())
                 .unwrap_or(0) as usize;
 
             if let Some(f) = filter {
                 let f_lower = f.to_lowercase();
-                let matches = name.as_deref().map(|n| n.to_lowercase().contains(&f_lower)).unwrap_or(false)
-                    || topic.as_deref().map(|t| t.to_lowercase().contains(&f_lower)).unwrap_or(false);
+                let matches = name
+                    .as_deref()
+                    .map(|n| n.to_lowercase().contains(&f_lower))
+                    .unwrap_or(false)
+                    || topic
+                        .as_deref()
+                        .map(|t| t.to_lowercase().contains(&f_lower))
+                        .unwrap_or(false);
                 if !matches {
                     continue;
                 }
@@ -520,7 +541,9 @@ impl RoomStore for SurrealStorage {
         for _ in 0..100 {
             let mut response = self
                 .db()
-                .query("SELECT in.room_id AS room_id FROM upgrades_to WHERE out = $room_rid LIMIT 1")
+                .query(
+                    "SELECT in.room_id AS room_id FROM upgrades_to WHERE out = $room_rid LIMIT 1",
+                )
                 .bind(("room_rid", room_rid(&current)))
                 .await
                 .map_err(|e| StorageError::Query(e.to_string()))?;

@@ -9,11 +9,10 @@ use crate::extractors::AuthenticatedUser;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/_matrix/client/v1/rooms/{roomId}/hierarchy",
-            get(get_hierarchy),
-        )
+    Router::new().route(
+        "/_matrix/client/v1/rooms/{roomId}/hierarchy",
+        get(get_hierarchy),
+    )
 }
 
 #[derive(Deserialize)]
@@ -64,7 +63,10 @@ async fn get_hierarchy(
         };
 
         // Get current state to extract name, topic, membership count
-        let current_state = storage.get_current_state(&current_room).await.unwrap_or_default();
+        let current_state = storage
+            .get_current_state(&current_room)
+            .await
+            .unwrap_or_default();
 
         let name = current_state
             .iter()
@@ -107,29 +109,30 @@ async fn get_hierarchy(
         let mut children_state = Vec::new();
         for event in &current_state {
             if event.event_type == "m.space.child"
-                && let Some(state_key) = &event.state_key {
-                    let suggested = event
-                        .content
-                        .get("suggested")
-                        .and_then(|s| s.as_bool())
-                        .unwrap_or(false);
+                && let Some(state_key) = &event.state_key
+            {
+                let suggested = event
+                    .content
+                    .get("suggested")
+                    .and_then(|s| s.as_bool())
+                    .unwrap_or(false);
 
-                    if query.suggested_only && !suggested {
-                        continue;
-                    }
-
-                    // Check via is not empty (required per spec)
-                    let has_via = event
-                        .content
-                        .get("via")
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|a| !a.is_empty());
-
-                    if has_via {
-                        children_state.push(event.to_client_event());
-                        queue.push((state_key.clone(), depth + 1));
-                    }
+                if query.suggested_only && !suggested {
+                    continue;
                 }
+
+                // Check via is not empty (required per spec)
+                let has_via = event
+                    .content
+                    .get("via")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|a| !a.is_empty());
+
+                if has_via {
+                    children_state.push(event.to_client_event());
+                    queue.push((state_key.clone(), depth + 1));
+                }
+            }
         }
 
         let mut room_entry = serde_json::json!({

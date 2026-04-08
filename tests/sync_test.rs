@@ -7,11 +7,7 @@ async fn test_initial_sync_empty() {
     let router = common::test_router();
     let (token, _, _) = common::register_user(&router, "syncer", "pass").await;
 
-    let (status, resp) = common::get_authed(
-        &router,
-        "/_matrix/client/v3/sync",
-        &token,
-    ).await;
+    let (status, resp) = common::get_authed(&router, "/_matrix/client/v3/sync", &token).await;
     assert_eq!(status, StatusCode::OK, "sync failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -30,9 +26,12 @@ async fn test_initial_sync_with_room() {
         "/_matrix/client/v3/createRoom",
         &serde_json::json!({"name": "Sync Test"}),
         &token,
-    ).await;
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send a message
     common::put_json_authed(
@@ -40,14 +39,11 @@ async fn test_initial_sync_with_room() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn1"),
         &serde_json::json!({"msgtype": "m.text", "body": "Hello sync!"}),
         &token,
-    ).await;
+    )
+    .await;
 
     // Sync
-    let (status, resp) = common::get_authed(
-        &router,
-        "/_matrix/client/v3/sync",
-        &token,
-    ).await;
+    let (status, resp) = common::get_authed(&router, "/_matrix/client/v3/sync", &token).await;
     assert_eq!(status, StatusCode::OK, "sync failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -76,14 +72,19 @@ async fn test_incremental_sync() {
         "/_matrix/client/v3/createRoom",
         &serde_json::json!({}),
         &token,
-    ).await;
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Initial sync to get a token
     let (_, resp) = common::get_authed(&router, "/_matrix/client/v3/sync", &token).await;
     let next_batch = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["next_batch"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send a message after the sync token
     common::put_json_authed(
@@ -91,14 +92,16 @@ async fn test_incremental_sync() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn_inc"),
         &serde_json::json!({"msgtype": "m.text", "body": "New message!"}),
         &token,
-    ).await;
+    )
+    .await;
 
     // Incremental sync
     let (status, resp) = common::get_authed(
         &router,
         &format!("/_matrix/client/v3/sync?since={next_batch}"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "incremental sync failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -109,9 +112,9 @@ async fn test_incremental_sync() {
 
     let timeline = room_data["timeline"]["events"].as_array().unwrap();
     assert!(
-        timeline.iter().any(|e| {
-            e["type"] == "m.room.message" && e["content"]["body"] == "New message!"
-        }),
+        timeline
+            .iter()
+            .any(|e| { e["type"] == "m.room.message" && e["content"]["body"] == "New message!" }),
         "new message not found in incremental sync timeline"
     );
 }

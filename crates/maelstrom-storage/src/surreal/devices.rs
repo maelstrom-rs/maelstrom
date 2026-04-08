@@ -175,11 +175,7 @@ impl DeviceStore for SurrealStorage {
             .collect())
     }
 
-    async fn remove_device(
-        &self,
-        user_id: &UserId,
-        device_id: &DeviceId,
-    ) -> StorageResult<()> {
+    async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) -> StorageResult<()> {
         let user_rid = Self::user_rid(user_id);
         let did = device_id.as_str().to_string();
         debug!(device_id = %device_id, user = %user_id.localpart(), "Removing device");
@@ -207,7 +203,11 @@ impl DeviceStore for SurrealStorage {
         Ok(())
     }
 
-    async fn remove_all_devices_except(&self, user_id: &UserId, keep_device_id: &DeviceId) -> StorageResult<()> {
+    async fn remove_all_devices_except(
+        &self,
+        user_id: &UserId,
+        keep_device_id: &DeviceId,
+    ) -> StorageResult<()> {
         let user_rid = Self::user_rid(user_id);
         let keep = keep_device_id.as_str().to_string();
         debug!(user = %user_id.localpart(), keep_device = %keep, "Removing all devices except one");
@@ -222,7 +222,12 @@ impl DeviceStore for SurrealStorage {
         Ok(())
     }
 
-    async fn update_device_display_name(&self, user_id: &UserId, device_id: &DeviceId, display_name: Option<&str>) -> StorageResult<()> {
+    async fn update_device_display_name(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+        display_name: Option<&str>,
+    ) -> StorageResult<()> {
         let user_rid = Self::user_rid(user_id);
         let did = device_id.as_str().to_string();
         let name = display_name.map(|s| s.to_string());

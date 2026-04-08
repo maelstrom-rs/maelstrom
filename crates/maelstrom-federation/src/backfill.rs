@@ -10,10 +10,7 @@ use crate::FederationState;
 
 pub fn routes() -> Router<FederationState> {
     Router::new()
-        .route(
-            "/_matrix/federation/v1/backfill/{roomId}",
-            get(backfill),
-        )
+        .route("/_matrix/federation/v1/backfill/{roomId}", get(backfill))
         .route(
             "/_matrix/federation/v1/get_missing_events/{roomId}",
             post(get_missing_events),
@@ -65,10 +62,7 @@ async fn backfill(
         .await
         .map_err(|_| MatrixError::not_found("Room not found"))?;
 
-    let pdus: Vec<serde_json::Value> = events
-        .iter()
-        .map(|e| e.to_federation_event())
-        .collect();
+    let pdus: Vec<serde_json::Value> = events.iter().map(|e| e.to_federation_event()).collect();
 
     Ok(Json(serde_json::json!({
         "origin": state.server_name().as_str(),
@@ -117,10 +111,7 @@ async fn get_missing_events(
         .await
         .unwrap_or_default();
 
-    let pdus: Vec<serde_json::Value> = events
-        .iter()
-        .map(|e| e.to_federation_event())
-        .collect();
+    let pdus: Vec<serde_json::Value> = events.iter().map(|e| e.to_federation_event()).collect();
 
     Ok(Json(serde_json::json!({ "events": pdus })))
 }

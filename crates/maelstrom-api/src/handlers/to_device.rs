@@ -5,7 +5,7 @@ use axum::{Json, Router};
 use maelstrom_core::error::MatrixError;
 use maelstrom_core::identifiers::UserId;
 
-use crate::extractors::{storage_error, AuthenticatedUser};
+use crate::extractors::{AuthenticatedUser, storage_error};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {

@@ -44,11 +44,7 @@ pub async fn get(router: &Router, uri: &str) -> (http::StatusCode, String) {
 }
 
 /// Send a GET request with Authorization header.
-pub async fn get_authed(
-    router: &Router,
-    uri: &str,
-    token: &str,
-) -> (http::StatusCode, String) {
+pub async fn get_authed(router: &Router, uri: &str, token: &str) -> (http::StatusCode, String) {
     let req = Request::builder()
         .uri(uri)
         .method("GET")

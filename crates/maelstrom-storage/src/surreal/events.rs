@@ -138,7 +138,8 @@ impl EventStore for SurrealStorage {
         if let Some(prev) = &event.prev_events {
             for prev_id in prev {
                 let prev_rid = RecordId::new("event", prev_id.as_str());
-                let _ = self.db()
+                let _ = self
+                    .db()
                     .query("RELATE $from->event_edge->$to SET edge_type = 'prev'")
                     .bind(("from", event_rid.clone()))
                     .bind(("to", prev_rid))
@@ -148,7 +149,8 @@ impl EventStore for SurrealStorage {
         if let Some(auth) = &event.auth_events {
             for auth_id in auth {
                 let auth_rid = RecordId::new("event", auth_id.as_str());
-                let _ = self.db()
+                let _ = self
+                    .db()
                     .query("RELATE $from->event_edge->$to SET edge_type = 'auth'")
                     .bind(("from", event_rid.clone()))
                     .bind(("to", auth_rid))
@@ -377,13 +379,12 @@ impl EventStore for SurrealStorage {
                         .take(0)
                         .map_err(|e| StorageError::Query(e.to_string()))?;
 
-                    return rows
-                        .into_iter()
-                        .next()
-                        .map(|r| r.position)
-                        .ok_or(StorageError::Internal(
-                            "stream_counter:global not found — schema bootstrap may have failed".to_string(),
-                        ));
+                    return rows.into_iter().next().map(|r| r.position).ok_or(
+                        StorageError::Internal(
+                            "stream_counter:global not found — schema bootstrap may have failed"
+                                .to_string(),
+                        ),
+                    );
                 }
                 Err(e) if attempt < 2 => {
                     tracing::warn!(attempt = attempt, error = %e, "stream_position retry");
@@ -393,7 +394,9 @@ impl EventStore for SurrealStorage {
                 Err(e) => return Err(StorageError::Query(e.to_string())),
             }
         }
-        Err(StorageError::Internal("stream_position exhausted retries".to_string()))
+        Err(StorageError::Internal(
+            "stream_position exhausted retries".to_string(),
+        ))
     }
 
     async fn current_stream_position(&self) -> StorageResult<i64> {
@@ -434,11 +437,7 @@ impl EventStore for SurrealStorage {
         Ok(())
     }
 
-    async fn get_txn_event(
-        &self,
-        device_id: &str,
-        txn_id: &str,
-    ) -> StorageResult<Option<String>> {
+    async fn get_txn_event(&self, device_id: &str, txn_id: &str) -> StorageResult<Option<String>> {
         let mut response = self
             .db()
             .query("SELECT event_id FROM txn_id WHERE device_id = $did AND txn_id = $tid")

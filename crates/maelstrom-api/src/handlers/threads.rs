@@ -54,14 +54,13 @@ async fn get_threads(
 
             // Add thread aggregation to unsigned
             if let Some(agg) = super::relations::build_aggregations(state.storage(), root_id).await
-                && let Some(obj) = client_event.as_object_mut() {
-                    let unsigned = obj
-                        .entry("unsigned")
-                        .or_insert(serde_json::json!({}));
-                    if let Some(u) = unsigned.as_object_mut() {
-                        u.insert("m.relations".to_string(), agg["m.relations"].clone());
-                    }
+                && let Some(obj) = client_event.as_object_mut()
+            {
+                let unsigned = obj.entry("unsigned").or_insert(serde_json::json!({}));
+                if let Some(u) = unsigned.as_object_mut() {
+                    u.insert("m.relations".to_string(), agg["m.relations"].clone());
                 }
+            }
 
             chunk.push(client_event);
         }
@@ -69,7 +68,10 @@ async fn get_threads(
 
     let next_batch = if chunk.len() == limit {
         // Use the stream position of the last event as pagination token
-        chunk.last().and_then(|e| e.get("origin_server_ts")).map(|ts| ts.to_string())
+        chunk
+            .last()
+            .and_then(|e| e.get("origin_server_ts"))
+            .map(|ts| ts.to_string())
     } else {
         None
     };

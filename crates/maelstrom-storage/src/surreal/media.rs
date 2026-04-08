@@ -64,19 +64,19 @@ impl MediaStore for SurrealStorage {
             quarantined: media.quarantined,
         };
 
-        let _: Option<serde_json::Value> = self
-            .db()
-            .create("media")
-            .content(input)
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("already exists") || msg.contains("unique") {
-                    StorageError::Duplicate(media.media_id.clone())
-                } else {
-                    StorageError::Query(msg)
-                }
-            })?;
+        let _: Option<serde_json::Value> =
+            self.db()
+                .create("media")
+                .content(input)
+                .await
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    if msg.contains("already exists") || msg.contains("unique") {
+                        StorageError::Duplicate(media.media_id.clone())
+                    } else {
+                        StorageError::Query(msg)
+                    }
+                })?;
 
         Ok(())
     }
@@ -100,7 +100,11 @@ impl MediaStore for SurrealStorage {
             .ok_or(StorageError::NotFound)
     }
 
-    async fn list_user_media(&self, user_id: &str, limit: usize) -> StorageResult<Vec<MediaRecord>> {
+    async fn list_user_media(
+        &self,
+        user_id: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<MediaRecord>> {
         let mut response = self
             .db()
             .query("SELECT * FROM media WHERE user_id = $uid ORDER BY created_at DESC LIMIT $lim")
@@ -116,10 +120,17 @@ impl MediaStore for SurrealStorage {
         Ok(rows.into_iter().map(|r| r.into_record()).collect())
     }
 
-    async fn set_media_quarantined(&self, server_name: &str, media_id: &str, quarantined: bool) -> StorageResult<()> {
+    async fn set_media_quarantined(
+        &self,
+        server_name: &str,
+        media_id: &str,
+        quarantined: bool,
+    ) -> StorageResult<()> {
         let mut response = self
             .db()
-            .query("UPDATE media SET quarantined = $q WHERE server_name = $server AND media_id = $mid")
+            .query(
+                "UPDATE media SET quarantined = $q WHERE server_name = $server AND media_id = $mid",
+            )
             .bind(("server", server_name.to_string()))
             .bind(("mid", media_id.to_string()))
             .bind(("q", quarantined))
@@ -139,7 +150,9 @@ impl MediaStore for SurrealStorage {
     async fn delete_media(&self, server_name: &str, media_id: &str) -> StorageResult<()> {
         let mut response = self
             .db()
-            .query("DELETE FROM media WHERE server_name = $server AND media_id = $mid RETURN BEFORE")
+            .query(
+                "DELETE FROM media WHERE server_name = $server AND media_id = $mid RETURN BEFORE",
+            )
             .bind(("server", server_name.to_string()))
             .bind(("mid", media_id.to_string()))
             .await
@@ -155,12 +168,18 @@ impl MediaStore for SurrealStorage {
         Ok(())
     }
 
-    async fn list_media_before(&self, before: chrono::DateTime<chrono::Utc>, limit: usize) -> StorageResult<Vec<MediaRecord>> {
+    async fn list_media_before(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<MediaRecord>> {
         let before_dt = surrealdb::types::Datetime::from(before);
 
         let mut response = self
             .db()
-            .query("SELECT * FROM media WHERE created_at < $before ORDER BY created_at ASC LIMIT $lim")
+            .query(
+                "SELECT * FROM media WHERE created_at < $before ORDER BY created_at ASC LIMIT $lim",
+            )
             .bind(("before", before_dt))
             .bind(("lim", limit as i64))
             .await

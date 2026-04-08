@@ -23,7 +23,6 @@ pub struct StoredEvent {
     pub stream_position: i64,
 
     // -- Federation fields (Phase 7) --
-
     /// Origin server name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,

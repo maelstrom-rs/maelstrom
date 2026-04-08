@@ -20,10 +20,7 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/client/v3/profile/{userId}/avatar_url",
             get(get_avatar_url).put(put_avatar_url),
         )
-        .route(
-            "/_matrix/client/v3/profile/{userId}",
-            get(get_profile),
-        )
+        .route("/_matrix/client/v3/profile/{userId}", get(get_profile))
 }
 
 // -- GET /profile/{userId}/displayname --

@@ -111,11 +111,11 @@ fn test_request_signing_roundtrip() {
 
 #[tokio::test]
 async fn test_key_server_endpoint() {
-    use std::sync::Arc;
     use axum::body::Body;
     use maelstrom_core::ephemeral::EphemeralStore;
     use maelstrom_core::identifiers::ServerName;
     use maelstrom_storage::mock::MockStorage;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     let storage = MockStorage::new();
@@ -202,14 +202,18 @@ async fn test_mock_federation_key_store() {
         .store_federation_txn("remote.example.com", "txn1")
         .await
         .unwrap();
-    assert!(store
-        .has_federation_txn("remote.example.com", "txn1")
-        .await
-        .unwrap());
-    assert!(!store
-        .has_federation_txn("remote.example.com", "txn2")
-        .await
-        .unwrap());
+    assert!(
+        store
+            .has_federation_txn("remote.example.com", "txn1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .has_federation_txn("remote.example.com", "txn2")
+            .await
+            .unwrap()
+    );
 }
 
 // -- StoredEvent federation fields test --

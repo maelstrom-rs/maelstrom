@@ -1,7 +1,7 @@
-use axum::Router;
-use axum::routing::get;
-use axum::response::IntoResponse;
 use axum::Json;
+use axum::Router;
+use axum::response::IntoResponse;
+use axum::routing::get;
 use serde::Serialize;
 
 use crate::state::AppState;

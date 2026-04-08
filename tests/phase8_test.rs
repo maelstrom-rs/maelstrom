@@ -11,9 +11,12 @@ async fn test_send_reaction_and_get_relations() {
 
     // Create a room
     let body = serde_json::json!({"preset": "public_chat"});
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
+    let (_, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send a message
     let msg = serde_json::json!({"body": "Hello!", "msgtype": "m.text"});
@@ -22,10 +25,13 @@ async fn test_send_reaction_and_get_relations() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn1"),
         &msg,
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let event_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["event_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send a reaction to it
     let reaction = serde_json::json!({
@@ -40,7 +46,8 @@ async fn test_send_reaction_and_get_relations() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.reaction/txn2"),
         &reaction,
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Get relations
@@ -48,7 +55,8 @@ async fn test_send_reaction_and_get_relations() {
         &router,
         &format!("/_matrix/client/v1/rooms/{room_id}/relations/{event_id}"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
     let chunk = json["chunk"].as_array().unwrap();
@@ -59,7 +67,8 @@ async fn test_send_reaction_and_get_relations() {
         &router,
         &format!("/_matrix/client/v1/rooms/{room_id}/relations/{event_id}/m.annotation"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
     assert_eq!(json["chunk"].as_array().unwrap().len(), 1);
@@ -71,9 +80,12 @@ async fn test_send_thread_reply() {
     let (token, _, _) = common::register_user(&router, "threader", "pass").await;
 
     let body = serde_json::json!({"preset": "public_chat"});
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
+    let (_, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send root message
     let msg = serde_json::json!({"body": "Thread root", "msgtype": "m.text"});
@@ -82,9 +94,12 @@ async fn test_send_thread_reply() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn1"),
         &msg,
         &token,
-    ).await;
+    )
+    .await;
     let root_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["event_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send thread reply
     let reply = serde_json::json!({
@@ -100,7 +115,8 @@ async fn test_send_thread_reply() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn2"),
         &reply,
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Get threads
@@ -108,7 +124,8 @@ async fn test_send_thread_reply() {
         &router,
         &format!("/_matrix/client/v1/rooms/{room_id}/threads"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
     let chunk = json["chunk"].as_array().unwrap();
@@ -130,9 +147,17 @@ async fn test_knock_on_room() {
             {"type": "m.room.join_rules", "state_key": "", "content": {"join_rule": "knock"}}
         ]
     });
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token_alice).await;
+    let (_, resp) = common::post_json_authed(
+        &router,
+        "/_matrix/client/v3/createRoom",
+        &body,
+        &token_alice,
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Bob knocks
     let knock_body = serde_json::json!({"reason": "Let me in!"});
@@ -141,7 +166,8 @@ async fn test_knock_on_room() {
         &format!("/_matrix/client/v3/knock/{room_id}"),
         &knock_body,
         &token_bob,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "Knock failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -156,9 +182,17 @@ async fn test_knock_rejected_on_public_room() {
 
     // Alice creates a public room (join_rule = "public")
     let body = serde_json::json!({"preset": "public_chat"});
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token_alice).await;
+    let (_, resp) = common::post_json_authed(
+        &router,
+        "/_matrix/client/v3/createRoom",
+        &body,
+        &token_alice,
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Bob tries to knock — should fail (room is public, not knock)
     let knock_body = serde_json::json!({});
@@ -167,7 +201,8 @@ async fn test_knock_rejected_on_public_room() {
         &format!("/_matrix/client/v3/knock/{room_id}"),
         &knock_body,
         &token_bob,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
@@ -179,9 +214,12 @@ async fn test_report_event() {
     let (token, _, _) = common::register_user(&router, "reporter", "pass").await;
 
     let body = serde_json::json!({"preset": "public_chat"});
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
+    let (_, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Send a message
     let msg = serde_json::json!({"body": "bad content", "msgtype": "m.text"});
@@ -190,9 +228,12 @@ async fn test_report_event() {
         &format!("/_matrix/client/v3/rooms/{room_id}/send/m.room.message/txn1"),
         &msg,
         &token,
-    ).await;
+    )
+    .await;
     let event_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["event_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Report it
     let report = serde_json::json!({"reason": "Inappropriate", "score": -50});
@@ -201,7 +242,8 @@ async fn test_report_event() {
         &format!("/_matrix/client/v3/rooms/{room_id}/report/{event_id}"),
         &report,
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -219,16 +261,20 @@ async fn test_space_hierarchy() {
             {"type": "m.room.create", "state_key": "", "content": {"type": "m.space"}}
         ]
     });
-    let (_, resp) = common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
+    let (_, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     let space_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Get hierarchy (should return at least the space itself)
     let (status, resp) = common::get_authed(
         &router,
         &format!("/_matrix/client/v1/rooms/{space_id}/hierarchy"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -258,15 +304,24 @@ async fn test_mock_relation_store() {
     store.store_relation(&relation).await.unwrap();
 
     // Get all relations
-    let rels = store.get_relations("$msg1", None, None, 10, None).await.unwrap();
+    let rels = store
+        .get_relations("$msg1", None, None, 10, None)
+        .await
+        .unwrap();
     assert_eq!(rels.len(), 1);
 
     // Get by type
-    let rels = store.get_relations("$msg1", Some("m.annotation"), None, 10, None).await.unwrap();
+    let rels = store
+        .get_relations("$msg1", Some("m.annotation"), None, 10, None)
+        .await
+        .unwrap();
     assert_eq!(rels.len(), 1);
 
     // Get non-matching type
-    let rels = store.get_relations("$msg1", Some("m.thread"), None, 10, None).await.unwrap();
+    let rels = store
+        .get_relations("$msg1", Some("m.thread"), None, 10, None)
+        .await
+        .unwrap();
     assert_eq!(rels.len(), 0);
 
     // Reaction counts

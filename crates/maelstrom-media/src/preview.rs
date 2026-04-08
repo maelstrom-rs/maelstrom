@@ -100,21 +100,23 @@ fn extract_og_from_html(html: &str) -> OgMetadata {
 
     // Fallback: use <title> tag if no og:title
     if meta.title.is_none()
-        && let Some(title_el) = document.select(&title_selector).next() {
-            let text = title_el.text().collect::<String>();
-            if !text.is_empty() {
-                meta.title = Some(text);
-            }
+        && let Some(title_el) = document.select(&title_selector).next()
+    {
+        let text = title_el.text().collect::<String>();
+        if !text.is_empty() {
+            meta.title = Some(text);
         }
+    }
 
     // Fallback: use meta description if no og:description
     if meta.description.is_none() {
         let desc_selector = scraper::Selector::parse("meta[name='description']").unwrap();
         if let Some(desc_el) = document.select(&desc_selector).next()
             && let Some(content) = desc_el.attr("content")
-                && !content.is_empty() {
-                    meta.description = Some(content.to_string());
-                }
+            && !content.is_empty()
+        {
+            meta.description = Some(content.to_string());
+        }
     }
 
     meta

@@ -2,7 +2,7 @@ use axum::body::Body;
 use http::{Request, StatusCode};
 use maelstrom_core::identifiers::ServerName;
 use maelstrom_storage::mock::MockStorage;
-use maelstrom_storage::traits::{UserRecord, DeviceRecord, UserStore, DeviceStore};
+use maelstrom_storage::traits::{DeviceRecord, DeviceStore, UserRecord, UserStore};
 use tower::ServiceExt;
 
 fn admin_router() -> axum::Router {
@@ -106,7 +106,9 @@ async fn test_admin_server_info() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["server_name"], "localhost");
@@ -133,7 +135,9 @@ async fn test_admin_prometheus_metrics() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
 
     assert!(text.contains("maelstrom_uptime_seconds"));
@@ -159,7 +163,9 @@ async fn test_admin_get_user() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["localpart"], "admin");
@@ -184,7 +190,9 @@ async fn test_admin_dashboard_page() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
 
     // Verify semantic HTML structure

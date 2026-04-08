@@ -4,7 +4,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use maelstrom_core::error::MatrixError;
-use maelstrom_core::events::pdu::{generate_event_id, timestamp_ms, StoredEvent};
+use maelstrom_core::events::pdu::{StoredEvent, generate_event_id, timestamp_ms};
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
@@ -12,11 +12,7 @@ use crate::notify::Notification;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/_matrix/client/v3/knock/{roomIdOrAlias}",
-            post(knock_room),
-        )
+    Router::new().route("/_matrix/client/v3/knock/{roomIdOrAlias}", post(knock_room))
 }
 
 #[derive(Deserialize)]
@@ -49,20 +45,22 @@ async fn knock_room(
     };
 
     // Verify room exists
-    storage
-        .get_room(&room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::not_found("Room not found"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    storage.get_room(&room_id).await.map_err(|e| match e {
+        StorageError::NotFound => MatrixError::not_found("Room not found"),
+        other => crate::extractors::storage_error(other),
+    })?;
 
     // Check join rules — knocking is only valid for rooms with join_rule "knock" or "knock_restricted"
     let join_rule = storage
         .get_state_event(&room_id, "m.room.join_rules", "")
         .await
         .ok()
-        .and_then(|e| e.content.get("join_rule").and_then(|j| j.as_str()).map(|s| s.to_string()))
+        .and_then(|e| {
+            e.content
+                .get("join_rule")
+                .and_then(|j| j.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "invite".to_string());
 
     if join_rule != "knock" && join_rule != "knock_restricted" {

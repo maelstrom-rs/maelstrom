@@ -17,10 +17,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         // Authenticated endpoints (Matrix v1.11+)
-        .route(
-            "/_matrix/client/v1/media/upload",
-            post(upload),
-        )
+        .route("/_matrix/client/v1/media/upload", post(upload))
         .route(
             "/_matrix/client/v1/media/download/{serverName}/{mediaId}",
             get(download),
@@ -33,19 +30,10 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/client/v1/media/thumbnail/{serverName}/{mediaId}",
             get(thumbnail),
         )
-        .route(
-            "/_matrix/client/v1/media/config",
-            get(config),
-        )
-        .route(
-            "/_matrix/client/v1/media/preview_url",
-            get(preview_url),
-        )
+        .route("/_matrix/client/v1/media/config", get(config))
+        .route("/_matrix/client/v1/media/preview_url", get(preview_url))
         // Legacy v3 endpoints (backwards compat)
-        .route(
-            "/_matrix/media/v3/upload",
-            post(upload),
-        )
+        .route("/_matrix/media/v3/upload", post(upload))
         .route(
             "/_matrix/media/v3/download/{serverName}/{mediaId}",
             get(download),
@@ -58,14 +46,8 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/media/v3/thumbnail/{serverName}/{mediaId}",
             get(thumbnail),
         )
-        .route(
-            "/_matrix/media/v3/config",
-            get(config),
-        )
-        .route(
-            "/_matrix/media/v3/preview_url",
-            get(preview_url),
-        )
+        .route("/_matrix/media/v3/config", get(config))
+        .route("/_matrix/media/v3/preview_url", get(preview_url))
 }
 
 // -- Upload --
@@ -87,9 +69,9 @@ async fn upload(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Result<Json<UploadResponse>, MatrixError> {
-    let media_client = state.media().ok_or_else(|| {
-        MatrixError::unknown("Media storage not configured")
-    })?;
+    let media_client = state
+        .media()
+        .ok_or_else(|| MatrixError::unknown("Media storage not configured"))?;
 
     // Validate size
     if body.len() as u64 > state.max_upload_size() {
@@ -181,7 +163,13 @@ async fn download_with_filename(
     _auth: AuthenticatedUser,
     Path(params): Path<DownloadWithFilenameParams>,
 ) -> Result<Response, MatrixError> {
-    serve_media(&state, &params.server_name, &params.media_id, Some(&params.file_name)).await
+    serve_media(
+        &state,
+        &params.server_name,
+        &params.media_id,
+        Some(&params.file_name),
+    )
+    .await
 }
 
 async fn serve_media(
@@ -197,18 +185,16 @@ async fn serve_media(
                 return Err(MatrixError::not_found("Media not found"));
             }
 
-            let media_client = state.media().ok_or_else(|| {
-                MatrixError::unknown("Media storage not configured")
-            })?;
+            let media_client = state
+                .media()
+                .ok_or_else(|| MatrixError::unknown("Media storage not configured"))?;
 
             let result = media_client
                 .download(&record.s3_key)
                 .await
                 .map_err(crate::extractors::media_error)?;
 
-            let filename = filename_override
-                .map(|s| s.to_string())
-                .or(record.filename);
+            let filename = filename_override.map(|s| s.to_string()).or(record.filename);
 
             let mut builder = Response::builder()
                 .header(header::CONTENT_TYPE, &record.content_type)
@@ -241,23 +227,17 @@ async fn proxy_remote_media(
 ) -> Result<Response, MatrixError> {
     debug!(server_name = %server_name, media_id = %media_id, "Proxying remote media");
 
-    let url = format!(
-        "https://{server_name}/_matrix/media/v3/download/{server_name}/{media_id}"
-    );
+    let url = format!("https://{server_name}/_matrix/media/v3/download/{server_name}/{media_id}");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|_| MatrixError::unknown("Failed to build HTTP client"))?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, "Failed to fetch remote media");
-            MatrixError::not_found("Remote media not available")
-        })?;
+    let resp = client.get(&url).send().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to fetch remote media");
+        MatrixError::not_found("Remote media not available")
+    })?;
 
     if !resp.status().is_success() {
         return Err(MatrixError::not_found("Remote media not found"));
@@ -306,9 +286,9 @@ async fn thumbnail(
     Path(params): Path<DownloadParams>,
     Query(query): Query<ThumbnailQuery>,
 ) -> Result<Response, MatrixError> {
-    let media_client = state.media().ok_or_else(|| {
-        MatrixError::unknown("Media storage not configured")
-    })?;
+    let media_client = state
+        .media()
+        .ok_or_else(|| MatrixError::unknown("Media storage not configured"))?;
 
     let record = state
         .storage()
@@ -335,13 +315,11 @@ async fn thumbnail(
 
     // Try to generate a thumbnail; fall back to original if not an image
     match maelstrom_media::thumbnail::generate(&result.data, width, height, method) {
-        Ok(Some(thumb)) => {
-            Response::builder()
-                .header(header::CONTENT_TYPE, &thumb.content_type)
-                .header(header::CONTENT_LENGTH, thumb.data.len())
-                .body(Body::from(thumb.data))
-                .map_err(|_| MatrixError::unknown("Failed to build response"))
-        }
+        Ok(Some(thumb)) => Response::builder()
+            .header(header::CONTENT_TYPE, &thumb.content_type)
+            .header(header::CONTENT_LENGTH, thumb.data.len())
+            .body(Body::from(thumb.data))
+            .map_err(|_| MatrixError::unknown("Failed to build response")),
         Ok(None) | Err(_) => {
             // Not an image or resize failed — serve original per spec
             Response::builder()

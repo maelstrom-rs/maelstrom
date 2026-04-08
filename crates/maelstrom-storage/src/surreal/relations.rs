@@ -50,7 +50,7 @@ impl RelationStore for SurrealStorage {
             .query(
                 "RELATE $from->relates_to->$to SET \
                  rel_type = $rtype, room_id = $rid, sender = $sender, \
-                 event_type = $etype, content_key = $ckey"
+                 event_type = $etype, content_key = $ckey",
             )
             .bind(("from", event_rid))
             .bind(("to", parent_rid))
@@ -79,7 +79,7 @@ impl RelationStore for SurrealStorage {
         let mut query = String::from(
             "SELECT rel_type, room_id, sender, event_type, content_key, \
              in.event_id AS child_event_id \
-             FROM relates_to WHERE out = $parent"
+             FROM relates_to WHERE out = $parent",
         );
         if rel_type.is_some() {
             query.push_str(" AND rel_type = $rtype");
@@ -135,7 +135,10 @@ impl RelationStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| (r.content_key, r.count as u64)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.content_key, r.count as u64))
+            .collect())
     }
 
     async fn get_latest_edit(&self, event_id: &str) -> StorageResult<Option<String>> {
@@ -159,7 +162,12 @@ impl RelationStore for SurrealStorage {
         Ok(rows.into_iter().next().map(|r| r.child_event_id))
     }
 
-    async fn get_thread_roots(&self, room_id: &str, limit: usize, _from: Option<i64>) -> StorageResult<Vec<String>> {
+    async fn get_thread_roots(
+        &self,
+        room_id: &str,
+        limit: usize,
+        _from: Option<i64>,
+    ) -> StorageResult<Vec<String>> {
         // Find distinct parent event_ids that have m.thread children in this room
         let mut response = self
             .db()

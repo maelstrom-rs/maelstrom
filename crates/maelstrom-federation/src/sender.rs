@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-use maelstrom_core::events::pdu::{timestamp_ms, StoredEvent};
+use maelstrom_core::events::pdu::{StoredEvent, timestamp_ms};
 use tracing::{debug, info, warn};
 
 use crate::client::FederationClient;

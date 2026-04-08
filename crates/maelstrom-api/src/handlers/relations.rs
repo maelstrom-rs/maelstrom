@@ -75,7 +75,15 @@ async fn get_relations(
     Path(params): Path<RelationsParams>,
     Query(query): Query<RelationsQuery>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    fetch_relations(&state, &params.event_id, None, None, query.limit, query.from.as_deref()).await
+    fetch_relations(
+        &state,
+        &params.event_id,
+        None,
+        None,
+        query.limit,
+        query.from.as_deref(),
+    )
+    .await
 }
 
 /// GET /rooms/{roomId}/relations/{eventId}/{relType}
@@ -85,7 +93,15 @@ async fn get_relations_by_type(
     Path(params): Path<RelationsByTypeParams>,
     Query(query): Query<RelationsQuery>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    fetch_relations(&state, &params.event_id, Some(&params.rel_type), None, query.limit, query.from.as_deref()).await
+    fetch_relations(
+        &state,
+        &params.event_id,
+        Some(&params.rel_type),
+        None,
+        query.limit,
+        query.from.as_deref(),
+    )
+    .await
 }
 
 /// GET /rooms/{roomId}/relations/{eventId}/{relType}/{eventType}
@@ -95,7 +111,15 @@ async fn get_relations_by_type_and_event_type(
     Path(params): Path<RelationsByTypeAndEventParams>,
     Query(query): Query<RelationsQuery>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    fetch_relations(&state, &params.event_id, Some(&params.rel_type), Some(&params.event_type), query.limit, query.from.as_deref()).await
+    fetch_relations(
+        &state,
+        &params.event_id,
+        Some(&params.rel_type),
+        Some(&params.event_type),
+        query.limit,
+        query.from.as_deref(),
+    )
+    .await
 }
 
 async fn fetch_relations(
@@ -135,58 +159,59 @@ pub async fn build_aggregations(
 
     // Reaction aggregations
     if let Ok(counts) = storage.get_reaction_counts(event_id).await
-        && !counts.is_empty() {
-            let chunk: Vec<serde_json::Value> = counts
-                .iter()
-                .map(|(key, count)| {
-                    serde_json::json!({
-                        "type": "m.reaction",
-                        "key": key,
-                        "count": count,
-                    })
+        && !counts.is_empty()
+    {
+        let chunk: Vec<serde_json::Value> = counts
+            .iter()
+            .map(|(key, count)| {
+                serde_json::json!({
+                    "type": "m.reaction",
+                    "key": key,
+                    "count": count,
                 })
-                .collect();
-            aggregations.insert(
-                "m.annotation".to_string(),
-                serde_json::json!({ "chunk": chunk }),
-            );
-        }
+            })
+            .collect();
+        aggregations.insert(
+            "m.annotation".to_string(),
+            serde_json::json!({ "chunk": chunk }),
+        );
+    }
 
     // Latest edit
     if let Ok(Some(edit_event_id)) = storage.get_latest_edit(event_id).await
-        && let Ok(edit_event) = storage.get_event(&edit_event_id).await {
-            aggregations.insert(
-                "m.replace".to_string(),
-                edit_event.to_client_event(),
-            );
-        }
+        && let Ok(edit_event) = storage.get_event(&edit_event_id).await
+    {
+        aggregations.insert("m.replace".to_string(), edit_event.to_client_event());
+    }
 
     // Thread summary
     if let Ok(thread_relations) = storage
         .get_relations(event_id, Some("m.thread"), None, 1, None)
         .await
-        && !thread_relations.is_empty() {
-            // Count total thread replies
-            let all_replies = storage
-                .get_relations(event_id, Some("m.thread"), None, 10000, None)
-                .await
-                .unwrap_or_default();
+        && !thread_relations.is_empty()
+    {
+        // Count total thread replies
+        let all_replies = storage
+            .get_relations(event_id, Some("m.thread"), None, 10000, None)
+            .await
+            .unwrap_or_default();
 
-            let count = all_replies.len();
-            let latest = all_replies.last();
+        let count = all_replies.len();
+        let latest = all_replies.last();
 
-            if let Some(latest_rel) = latest
-                && let Ok(latest_event) = storage.get_event(&latest_rel.event_id).await {
-                    aggregations.insert(
-                        "m.thread".to_string(),
-                        serde_json::json!({
-                            "latest_event": latest_event.to_client_event(),
-                            "count": count,
-                            "current_user_participated": false,
-                        }),
-                    );
-                }
+        if let Some(latest_rel) = latest
+            && let Ok(latest_event) = storage.get_event(&latest_rel.event_id).await
+        {
+            aggregations.insert(
+                "m.thread".to_string(),
+                serde_json::json!({
+                    "latest_event": latest_event.to_client_event(),
+                    "count": count,
+                    "current_user_participated": false,
+                }),
+            );
         }
+    }
 
     if aggregations.is_empty() {
         None

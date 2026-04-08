@@ -144,11 +144,7 @@ async fn post_register(
     };
 
     // First user to register becomes admin automatically
-    let is_first_user = state
-        .storage()
-        .count_users()
-        .await
-        .unwrap_or(1) == 0;
+    let is_first_user = state.storage().count_users().await.unwrap_or(1) == 0;
 
     let user = UserRecord {
         localpart: username.clone(),

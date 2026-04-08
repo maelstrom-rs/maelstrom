@@ -19,7 +19,7 @@ pub struct RetentionConfig {
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
-            max_age_days: 0,       // disabled by default
+            max_age_days: 0,           // disabled by default
             sweep_interval_secs: 3600, // every hour
             batch_size: 500,
         }
@@ -55,8 +55,7 @@ pub fn spawn_retention_task(
         loop {
             tokio::time::sleep(interval).await;
 
-            let cutoff = Utc::now()
-                - chrono::Duration::days(config.max_age_days as i64);
+            let cutoff = Utc::now() - chrono::Duration::days(config.max_age_days as i64);
 
             debug!(cutoff = %cutoff, "Running retention sweep");
 

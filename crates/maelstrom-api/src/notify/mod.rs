@@ -163,9 +163,10 @@ impl Notifier for LocalNotifier {
                 while let Ok(notification) = rx.recv().await {
                     if let Notification::Presence { user_id } = &notification
                         && *user_id == uid
-                            && mpsc_tx.send(notification).await.is_err() {
-                                break;
-                            }
+                        && mpsc_tx.send(notification).await.is_err()
+                    {
+                        break;
+                    }
                 }
             });
         }

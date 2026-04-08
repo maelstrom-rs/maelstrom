@@ -84,10 +84,7 @@ fn get_limiter() -> RateLimiter {
 }
 
 /// Axum middleware layer for rate limiting login/register endpoints.
-pub async fn rate_limit_auth(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn rate_limit_auth(request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path();
     let is_auth_endpoint = path.contains("/login") || path.contains("/register");
 

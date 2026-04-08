@@ -1,13 +1,13 @@
+pub mod backfill;
 pub mod client;
+pub mod joins;
 pub mod key_server;
 pub mod receiver;
-pub mod joins;
-pub mod state;
-pub mod backfill;
+pub mod router;
 pub mod sender;
 pub mod signing;
+pub mod state;
 pub mod user_keys;
-pub mod router;
 
 use std::sync::Arc;
 
@@ -37,10 +37,7 @@ impl FederationState {
         signing_key: KeyPair,
         server_name: ServerName,
     ) -> Self {
-        let fed_client = client::FederationClient::new(
-            signing_key.clone(),
-            server_name.clone(),
-        );
+        let fed_client = client::FederationClient::new(signing_key.clone(), server_name.clone());
 
         Self {
             inner: Arc::new(FederationStateInner {

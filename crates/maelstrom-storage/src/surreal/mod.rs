@@ -1,15 +1,15 @@
+mod account_data;
 pub mod connection;
+mod devices;
+mod events;
+mod federation;
+mod keys;
+mod media;
+mod receipts;
+mod relations;
+mod rooms;
 pub mod schema;
 mod users;
-mod devices;
-mod rooms;
-mod events;
-mod receipts;
-mod keys;
-mod account_data;
-mod federation;
-mod media;
-mod relations;
 
 use async_trait::async_trait;
 use surrealdb::Surreal;

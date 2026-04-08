@@ -1,24 +1,39 @@
 use axum::extract::{Path, State};
-use axum::routing::{get, post, put, delete};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
 use maelstrom_core::error::MatrixError;
 use maelstrom_storage::traits::StorageError;
 
-use crate::auth::AdminUser;
 use crate::AdminState;
+use crate::auth::AdminUser;
 
 pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/_maelstrom/admin/v1/users", get(list_users))
         .route("/_maelstrom/admin/v1/users/{userId}", get(get_user))
-        .route("/_maelstrom/admin/v1/users/{userId}/deactivate", post(deactivate_user))
-        .route("/_maelstrom/admin/v1/users/{userId}/reactivate", post(reactivate_user))
+        .route(
+            "/_maelstrom/admin/v1/users/{userId}/deactivate",
+            post(deactivate_user),
+        )
+        .route(
+            "/_maelstrom/admin/v1/users/{userId}/reactivate",
+            post(reactivate_user),
+        )
         .route("/_maelstrom/admin/v1/users/{userId}/admin", put(set_admin))
-        .route("/_maelstrom/admin/v1/users/{userId}/admin", delete(remove_admin))
-        .route("/_maelstrom/admin/v1/users/{userId}/reset-password", post(reset_password))
-        .route("/_maelstrom/admin/v1/users/{userId}/devices", get(list_devices))
+        .route(
+            "/_maelstrom/admin/v1/users/{userId}/admin",
+            delete(remove_admin),
+        )
+        .route(
+            "/_maelstrom/admin/v1/users/{userId}/reset-password",
+            post(reset_password),
+        )
+        .route(
+            "/_maelstrom/admin/v1/users/{userId}/devices",
+            get(list_devices),
+        )
 }
 
 async fn list_users(
@@ -36,7 +51,11 @@ async fn get_user(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
 
     let user = state
         .storage()
@@ -51,8 +70,14 @@ async fn get_user(
 
     let devices = state
         .storage()
-        .list_devices(&maelstrom_core::identifiers::UserId::parse(&user_id)
-            .unwrap_or_else(|_| maelstrom_core::identifiers::UserId::new(localpart, &maelstrom_core::identifiers::ServerName::new("localhost"))))
+        .list_devices(
+            &maelstrom_core::identifiers::UserId::parse(&user_id).unwrap_or_else(|_| {
+                maelstrom_core::identifiers::UserId::new(
+                    localpart,
+                    &maelstrom_core::identifiers::ServerName::new("localhost"),
+                )
+            }),
+        )
         .await
         .unwrap_or_default();
 
@@ -81,7 +106,11 @@ async fn deactivate_user(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
     state
         .storage()
         .set_deactivated(localpart, true)
@@ -95,7 +124,11 @@ async fn reactivate_user(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
     state
         .storage()
         .set_deactivated(localpart, false)
@@ -109,7 +142,11 @@ async fn set_admin(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
     state
         .storage()
         .set_admin(localpart, true)
@@ -123,7 +160,11 @@ async fn remove_admin(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
     state
         .storage()
         .set_admin(localpart, false)
@@ -143,10 +184,14 @@ async fn reset_password(
     Path(user_id): Path<String>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let localpart = user_id.split(':').next().unwrap_or(&user_id).trim_start_matches('@');
+    let localpart = user_id
+        .split(':')
+        .next()
+        .unwrap_or(&user_id)
+        .trim_start_matches('@');
 
-    use argon2::{Argon2, PasswordHasher};
     use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
     let salt = SaltString::generate(&mut rand::thread_rng());
     let hash = Argon2::default()
         .hash_password(body.new_password.as_bytes(), &salt)

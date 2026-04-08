@@ -12,7 +12,5 @@ pub fn build(state: FederationState) -> Router {
         .merge(crate::backfill::routes())
         .merge(crate::user_keys::routes());
 
-    Router::new()
-        .merge(federation_api)
-        .with_state(state)
+    Router::new().merge(federation_api).with_state(state)
 }

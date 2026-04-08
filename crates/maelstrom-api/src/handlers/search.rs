@@ -64,7 +64,8 @@ async fn search(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let storage = state.storage();
     let user_id = auth.user_id.to_string();
-    let offset = search_query.next_batch
+    let offset = search_query
+        .next_batch
         .as_deref()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
@@ -76,15 +77,11 @@ async fn search(
 
     // Determine which rooms to search
     let mut room_ids = match &room_search.filter {
-        Some(filter) if filter.rooms.is_some() => {
-            filter.rooms.clone().unwrap_or_default()
-        }
-        _ => {
-            storage
-                .get_joined_rooms(&user_id)
-                .await
-                .map_err(crate::extractors::storage_error)?
-        }
+        Some(filter) if filter.rooms.is_some() => filter.rooms.clone().unwrap_or_default(),
+        _ => storage
+            .get_joined_rooms(&user_id)
+            .await
+            .map_err(crate::extractors::storage_error)?,
     };
 
     // Traverse room upgrade chains to include predecessor rooms in search
@@ -134,7 +131,9 @@ async fn search(
         .filter(|e| {
             // Exclude redacted events (empty content)
             let has_content = e.content.as_object().map(|o| !o.is_empty()).unwrap_or(true);
-            if !has_content { return false; }
+            if !has_content {
+                return false;
+            }
 
             // Ensure the body contains the search term
             if let Some(body) = e.content.get("body").and_then(|b| b.as_str()) {
@@ -154,8 +153,16 @@ async fn search(
     let filtered: Vec<_> = all_filtered.into_iter().skip(offset).take(limit).collect();
 
     let include_context = room_search.event_context.is_some();
-    let before_limit = room_search.event_context.as_ref().and_then(|c| c.before_limit).unwrap_or(5);
-    let after_limit = room_search.event_context.as_ref().and_then(|c| c.after_limit).unwrap_or(5);
+    let before_limit = room_search
+        .event_context
+        .as_ref()
+        .and_then(|c| c.before_limit)
+        .unwrap_or(5);
+    let after_limit = room_search
+        .event_context
+        .as_ref()
+        .and_then(|c| c.after_limit)
+        .unwrap_or(5);
 
     let mut results: Vec<serde_json::Value> = Vec::new();
     for event in &filtered {
@@ -169,10 +176,16 @@ async fn search(
             let mut before_events = Vec::new();
             let mut after_events = Vec::new();
 
-            if let Ok(before) = storage.get_room_events(&event.room_id, event.stream_position, before_limit, "b").await {
+            if let Ok(before) = storage
+                .get_room_events(&event.room_id, event.stream_position, before_limit, "b")
+                .await
+            {
                 before_events = before.iter().map(|e| e.to_client_event()).collect();
             }
-            if let Ok(after) = storage.get_room_events(&event.room_id, event.stream_position, after_limit, "f").await {
+            if let Ok(after) = storage
+                .get_room_events(&event.room_id, event.stream_position, after_limit, "f")
+                .await
+            {
                 after_events = after.iter().map(|e| e.to_client_event()).collect();
             }
 
@@ -203,7 +216,8 @@ async fn search(
 
     // Add next_batch if there are more results
     if has_more {
-        response["search_categories"]["room_events"]["next_batch"] = serde_json::json!(next_offset.to_string());
+        response["search_categories"]["room_events"]["next_batch"] =
+            serde_json::json!(next_offset.to_string());
     }
 
     Ok(Json(response))

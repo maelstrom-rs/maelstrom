@@ -1,8 +1,8 @@
 use axum::Router;
 use tower_http::services::ServeDir;
 
-use crate::handlers;
 use crate::AdminState;
+use crate::handlers;
 
 /// Build the complete admin router with API + dashboard + static files.
 pub fn build(state: AdminState) -> Router {
@@ -18,9 +18,7 @@ pub fn build(state: AdminState) -> Router {
         .merge(handlers::dashboard::routes());
 
     // Static files (CSS)
-    let static_dir = ServeDir::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/static")
-    );
+    let static_dir = ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static"));
 
     Router::new()
         .merge(admin_api)

@@ -63,16 +63,17 @@ impl FederationClient {
 
         if let Ok(resp) = self.http.get(&well_known_url).send().await
             && resp.status().is_success()
-                && let Ok(text) = resp.text().await
-                    && let Ok(body) = serde_json::from_str::<serde_json::Value>(&text)
-                        && let Some(server) = body.get("m.server").and_then(|s| s.as_str()) {
-                            debug!(server = %server, "Discovered via .well-known");
-                            if server.contains(':') {
-                                return format!("https://{server}");
-                            } else {
-                                return format!("https://{server}:8448");
-                            }
-                        }
+            && let Ok(text) = resp.text().await
+            && let Ok(body) = serde_json::from_str::<serde_json::Value>(&text)
+            && let Some(server) = body.get("m.server").and_then(|s| s.as_str())
+        {
+            debug!(server = %server, "Discovered via .well-known");
+            if server.contains(':') {
+                return format!("https://{server}");
+            } else {
+                return format!("https://{server}:8448");
+            }
+        }
 
         // Try SRV record: _matrix-fed._tcp.{server_name}
         if let Some(endpoint) = self.try_srv_lookup(server_name).await {
@@ -90,7 +91,6 @@ impl FederationClient {
     /// Uses a system DNS query via tokio's spawn_blocking + std::process.
     async fn try_srv_lookup(&self, server_name: &str) -> Option<String> {
         let srv_name = format!("_matrix-fed._tcp.{server_name}");
-        
 
         tokio::task::spawn_blocking(move || {
             // Use the `dig` command for SRV lookup (available on most Unix systems)
@@ -156,8 +156,7 @@ impl FederationClient {
             )));
         }
 
-        serde_json::from_str(&text)
-            .map_err(|e| FederationError::InvalidResponse(e.to_string()))
+        serde_json::from_str(&text).map_err(|e| FederationError::InvalidResponse(e.to_string()))
     }
 
     /// Send a signed PUT request with a JSON body to a remote server.
@@ -179,8 +178,8 @@ impl FederationClient {
             Some(body),
         );
 
-        let body_str = serde_json::to_string(body)
-            .map_err(|e| FederationError::Request(e.to_string()))?;
+        let body_str =
+            serde_json::to_string(body).map_err(|e| FederationError::Request(e.to_string()))?;
 
         let response = self
             .http
@@ -205,8 +204,7 @@ impl FederationClient {
             )));
         }
 
-        serde_json::from_str(&text)
-            .map_err(|e| FederationError::InvalidResponse(e.to_string()))
+        serde_json::from_str(&text).map_err(|e| FederationError::InvalidResponse(e.to_string()))
     }
 
     /// Fetch a remote server's signing keys.

@@ -62,18 +62,16 @@ pub fn resolve_state(
             continue;
         }
 
-        let all_same = non_none.windows(2).all(|w| w[0] == w[1])
-            && non_none.len() == state_sets.len();
+        let all_same =
+            non_none.windows(2).all(|w| w[0] == w[1]) && non_none.len() == state_sets.len();
 
         if all_same {
             // Unconflicted — all agree.
             unconflicted.insert(key.clone(), events[0].clone());
         } else {
             // Conflicted — different events for the same state key.
-            let unique_events: Vec<StoredEvent> = events
-                .iter()
-                .map(|e| (*e).clone())
-                .collect::<Vec<_>>();
+            let unique_events: Vec<StoredEvent> =
+                events.iter().map(|e| (*e).clone()).collect::<Vec<_>>();
             conflicted.insert(key.clone(), unique_events);
         }
     }
@@ -124,11 +122,13 @@ pub fn resolve_state(
     let mut resolved = unconflicted.clone();
 
     for event in &conflicted_auth {
-        let key = (event.event_type.clone(), event.state_key.clone().unwrap_or_default());
-        if !resolved.contains_key(&key)
-            && is_auth_allowed(event, &resolved) {
-                resolved.insert(key, event.clone());
-            }
+        let key = (
+            event.event_type.clone(),
+            event.state_key.clone().unwrap_or_default(),
+        );
+        if !resolved.contains_key(&key) && is_auth_allowed(event, &resolved) {
+            resolved.insert(key, event.clone());
+        }
         // If key already set by a higher-priority event, skip.
     }
 
@@ -142,7 +142,10 @@ pub fn resolve_state(
     });
 
     for event in &conflicted_other {
-        let key = (event.event_type.clone(), event.state_key.clone().unwrap_or_default());
+        let key = (
+            event.event_type.clone(),
+            event.state_key.clone().unwrap_or_default(),
+        );
         if !resolved.contains_key(&key) {
             // No existing event — accept if auth passes.
             if is_auth_allowed(event, &resolved) {
@@ -158,7 +161,10 @@ pub fn resolve_state(
 /// Get the power level of a sender from the power_levels event content.
 fn get_sender_power_level(sender: &str, power_levels: Option<&serde_json::Value>) -> i64 {
     if let Some(pl) = power_levels {
-        if let Some(level) = pl.get("users").and_then(|u| u.get(sender)).and_then(|l| l.as_i64())
+        if let Some(level) = pl
+            .get("users")
+            .and_then(|u| u.get(sender))
+            .and_then(|l| l.as_i64())
         {
             return level;
         }
@@ -188,7 +194,9 @@ fn is_auth_allowed(event: &StoredEvent, current_state: &HashMap<StateKey, Stored
             {
                 level
             } else {
-                pl.get("state_default").and_then(|d| d.as_i64()).unwrap_or(50)
+                pl.get("state_default")
+                    .and_then(|d| d.as_i64())
+                    .unwrap_or(50)
             }
         } else {
             0 // No power levels yet, allow everything
@@ -196,7 +204,9 @@ fn is_auth_allowed(event: &StoredEvent, current_state: &HashMap<StateKey, Stored
     } else {
         // Non-state events default to events_default (0)
         if let Some(pl) = power_levels {
-            pl.get("events_default").and_then(|d| d.as_i64()).unwrap_or(0)
+            pl.get("events_default")
+                .and_then(|d| d.as_i64())
+                .unwrap_or(0)
         } else {
             0
         }
@@ -209,7 +219,13 @@ fn is_auth_allowed(event: &StoredEvent, current_state: &HashMap<StateKey, Stored
 mod tests {
     use super::*;
 
-    fn make_event(event_id: &str, event_type: &str, state_key: &str, sender: &str, ts: u64) -> StoredEvent {
+    fn make_event(
+        event_id: &str,
+        event_type: &str,
+        state_key: &str,
+        sender: &str,
+        ts: u64,
+    ) -> StoredEvent {
         StoredEvent {
             event_id: event_id.to_string(),
             room_id: "!room:example.com".to_string(),
@@ -239,7 +255,10 @@ mod tests {
 
         let resolved = resolve_state(&[state.clone()], &HashMap::new());
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[&("m.room.create".to_string(), String::new())].event_id, "$create");
+        assert_eq!(
+            resolved[&("m.room.create".to_string(), String::new())].event_id,
+            "$create"
+        );
     }
 
     #[test]
@@ -295,8 +314,12 @@ mod tests {
             origin_server_ts: 500,
             unsigned: None,
             stream_position: 0,
-            origin: None, auth_events: None, prev_events: None,
-            depth: None, hashes: None, signatures: None,
+            origin: None,
+            auth_events: None,
+            prev_events: None,
+            depth: None,
+            hashes: None,
+            signatures: None,
         };
 
         // Admin sets name at ts=2000, user sets name at ts=1000
@@ -304,11 +327,17 @@ mod tests {
         let name_user = make_event("$name_user", "m.room.name", "", "@user:b.com", 1000);
 
         let mut set1 = HashMap::new();
-        set1.insert(("m.room.power_levels".to_string(), String::new()), power_levels.clone());
+        set1.insert(
+            ("m.room.power_levels".to_string(), String::new()),
+            power_levels.clone(),
+        );
         set1.insert(("m.room.name".to_string(), String::new()), name_admin);
 
         let mut set2 = HashMap::new();
-        set2.insert(("m.room.power_levels".to_string(), String::new()), power_levels);
+        set2.insert(
+            ("m.room.power_levels".to_string(), String::new()),
+            power_levels,
+        );
         set2.insert(("m.room.name".to_string(), String::new()), name_user);
 
         let resolved = resolve_state(&[set1, set2], &HashMap::new());

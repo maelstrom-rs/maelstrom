@@ -1,7 +1,7 @@
-pub mod users;
-pub mod rooms;
-pub mod media;
-pub mod federation;
-pub mod server;
-pub mod reports;
 pub mod dashboard;
+pub mod federation;
+pub mod media;
+pub mod reports;
+pub mod rooms;
+pub mod server;
+pub mod users;

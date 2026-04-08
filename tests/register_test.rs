@@ -95,8 +95,11 @@ async fn test_register_inhibit_login() {
 #[tokio::test]
 async fn test_register_available_true() {
     let router = common::test_router();
-    let (status, resp) =
-        common::get(&router, "/_matrix/client/v3/register/available?username=newuser").await;
+    let (status, resp) = common::get(
+        &router,
+        "/_matrix/client/v3/register/available?username=newuser",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -110,8 +113,11 @@ async fn test_register_available_taken() {
     // Register a user first
     common::register_user(&router, "taken", "pass").await;
 
-    let (status, resp) =
-        common::get(&router, "/_matrix/client/v3/register/available?username=taken").await;
+    let (status, resp) = common::get(
+        &router,
+        "/_matrix/client/v3/register/available?username=taken",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -121,8 +127,11 @@ async fn test_register_available_taken() {
 #[tokio::test]
 async fn test_register_available_invalid_username() {
     let router = common::test_router();
-    let (status, resp) =
-        common::get(&router, "/_matrix/client/v3/register/available?username=BAD%20NAME").await;
+    let (status, resp) = common::get(
+        &router,
+        "/_matrix/client/v3/register/available?username=BAD%20NAME",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();

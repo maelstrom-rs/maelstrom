@@ -157,17 +157,23 @@ async fn post_login(
     // Record device list change for sync tracking
     // Increment stream position so other users' syncs see a change
     let change_pos = state.storage().next_stream_position().await.unwrap_or(0);
-    let _ = state.storage().set_account_data(
-        user_id.as_ref(),
-        None,
-        "_maelstrom.device_change_pos",
-        &serde_json::json!({"pos": change_pos}),
-    ).await;
+    let _ = state
+        .storage()
+        .set_account_data(
+            user_id.as_ref(),
+            None,
+            "_maelstrom.device_change_pos",
+            &serde_json::json!({"pos": change_pos}),
+        )
+        .await;
 
     // Notify all rooms the user is in so other users' syncs wake up
     if let Ok(rooms) = state.storage().get_joined_rooms(user_id.as_ref()).await {
         for room_id in rooms {
-            state.notifier().notify(crate::notify::Notification::RoomEvent { room_id }).await;
+            state
+                .notifier()
+                .notify(crate::notify::Notification::RoomEvent { room_id })
+                .await;
         }
     }
 

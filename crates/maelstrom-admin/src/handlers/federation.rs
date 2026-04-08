@@ -4,12 +4,14 @@ use axum::{Json, Router};
 
 use maelstrom_core::error::MatrixError;
 
-use crate::auth::AdminUser;
 use crate::AdminState;
+use crate::auth::AdminUser;
 
 pub fn routes() -> Router<AdminState> {
-    Router::new()
-        .route("/_maelstrom/admin/v1/federation/stats", get(federation_stats))
+    Router::new().route(
+        "/_maelstrom/admin/v1/federation/stats",
+        get(federation_stats),
+    )
 }
 
 async fn federation_stats(

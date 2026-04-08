@@ -112,7 +112,10 @@ impl FederationKeyStore for SurrealStorage {
         Ok(())
     }
 
-    async fn get_remote_server_keys(&self, server_name: &str) -> StorageResult<Vec<RemoteKeyRecord>> {
+    async fn get_remote_server_keys(
+        &self,
+        server_name: &str,
+    ) -> StorageResult<Vec<RemoteKeyRecord>> {
         let mut response = self
             .db()
             .query("SELECT * FROM remote_server_key WHERE server_name = $sn")

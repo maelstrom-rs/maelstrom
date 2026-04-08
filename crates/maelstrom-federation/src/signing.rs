@@ -43,11 +43,20 @@ pub fn parse_x_matrix_header(header: &str) -> Option<(String, String, String)> {
 
     for part in header.split(',') {
         let part = part.trim();
-        if let Some(val) = part.strip_prefix("origin=\"").and_then(|s| s.strip_suffix('"')) {
+        if let Some(val) = part
+            .strip_prefix("origin=\"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
             origin = Some(val.to_string());
-        } else if let Some(val) = part.strip_prefix("key=\"").and_then(|s| s.strip_suffix('"')) {
+        } else if let Some(val) = part
+            .strip_prefix("key=\"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
             key_id = Some(val.to_string());
-        } else if let Some(val) = part.strip_prefix("sig=\"").and_then(|s| s.strip_suffix('"')) {
+        } else if let Some(val) = part
+            .strip_prefix("sig=\"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
             sig = Some(val.to_string());
         }
     }
@@ -128,7 +137,8 @@ mod tests {
 
     #[test]
     fn test_parse_x_matrix_header() {
-        let header = r#"X-Matrix origin="a.com",destination="b.com",key="ed25519:abc",sig="base64sig""#;
+        let header =
+            r#"X-Matrix origin="a.com",destination="b.com",key="ed25519:abc",sig="base64sig""#;
         let (origin, key, sig) = parse_x_matrix_header(header).unwrap();
         assert_eq!(origin, "a.com");
         assert_eq!(key, "ed25519:abc");

@@ -58,10 +58,7 @@ impl KeyStore for SurrealStorage {
             })
             .unwrap_or_default();
 
-        let key_map = keys
-            .get("keys")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
+        let key_map = keys.get("keys").cloned().unwrap_or(serde_json::json!({}));
 
         let signatures = keys
             .get("signatures")

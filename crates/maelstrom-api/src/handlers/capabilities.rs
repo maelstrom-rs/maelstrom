@@ -34,7 +34,9 @@ pub fn routes() -> Router<AppState> {
         .route("/_matrix/client/v3/pushers/set", post(set_pushers))
         .route(
             "/_matrix/client/v3/pushrules/global/{kind}/{ruleId}",
-            axum::routing::put(set_pushrule).get(get_pushrule).delete(delete_pushrule),
+            axum::routing::put(set_pushrule)
+                .get(get_pushrule)
+                .delete(delete_pushrule),
         )
         .route(
             "/_matrix/client/v3/pushrules/global/{kind}/{ruleId}/enabled",
@@ -44,10 +46,7 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/client/v3/pushrules/global/{kind}/{ruleId}/actions",
             axum::routing::put(set_pushrule_actions).get(get_pushrule_actions),
         )
-        .route(
-            "/_matrix/client/v3/voip/turnServer",
-            get(get_turn_server),
-        )
+        .route("/_matrix/client/v3/voip/turnServer", get(get_turn_server))
         .route("/_matrix/client/v3/devices", get(list_devices))
         .route(
             "/_matrix/client/v3/devices/{deviceId}",
@@ -102,39 +101,36 @@ async fn create_filter(
     }
 
     // Validate known filter fields: if present, they must be objects
-    let object_fields = [
-        "room", "presence", "account_data", "event_fields",
-    ];
+    let object_fields = ["room", "presence", "account_data", "event_fields"];
     if let Some(obj) = body.as_object() {
         for field in &object_fields {
             if let Some(val) = obj.get(*field) {
                 // event_fields is allowed to be an array
                 if *field == "event_fields" {
                     if !val.is_array() {
-                        return Err(MatrixError::bad_json(
-                            format!("Filter field '{field}' must be an array"),
-                        ));
+                        return Err(MatrixError::bad_json(format!(
+                            "Filter field '{field}' must be an array"
+                        )));
                     }
                 } else if !val.is_object() {
-                    return Err(MatrixError::bad_json(
-                        format!("Filter field '{field}' must be an object"),
-                    ));
+                    return Err(MatrixError::bad_json(format!(
+                        "Filter field '{field}' must be an object"
+                    )));
                 }
             }
         }
 
         // Validate room sub-fields if room is present
         if let Some(room) = obj.get("room").and_then(|v| v.as_object()) {
-            let room_object_fields = [
-                "state", "timeline", "ephemeral", "account_data",
-            ];
+            let room_object_fields = ["state", "timeline", "ephemeral", "account_data"];
             for field in &room_object_fields {
                 if let Some(val) = room.get(*field)
-                    && !val.is_object() {
-                        return Err(MatrixError::bad_json(
-                            format!("Filter field 'room.{field}' must be an object"),
-                        ));
-                    }
+                    && !val.is_object()
+                {
+                    return Err(MatrixError::bad_json(format!(
+                        "Filter field 'room.{field}' must be an object"
+                    )));
+                }
             }
         }
     }
@@ -162,7 +158,12 @@ async fn create_filter(
 
     // Increment the counter
     let _ = storage
-        .set_account_data(&sender, None, counter_key, &serde_json::json!({ "next": counter + 1 }))
+        .set_account_data(
+            &sender,
+            None,
+            counter_key,
+            &serde_json::json!({ "next": counter + 1 }),
+        )
         .await;
 
     Ok(Json(serde_json::json!({ "filter_id": filter_id })))
@@ -346,58 +347,50 @@ async fn set_pushers(
     // Store back
     state
         .storage()
-        .set_account_data(&user_id, None, "_maelstrom.pushers", &serde_json::json!({"items": pushers}))
+        .set_account_data(
+            &user_id,
+            None,
+            "_maelstrom.pushers",
+            &serde_json::json!({"items": pushers}),
+        )
         .await
         .map_err(crate::extractors::storage_error)?;
 
     Ok(Json(serde_json::json!({})))
 }
 
-async fn set_pushrule(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn set_pushrule(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({}))
 }
 
-async fn get_pushrule(
-    _auth: AuthenticatedUser,
-) -> (http::StatusCode, Json<serde_json::Value>) {
-    (http::StatusCode::NOT_FOUND, Json(serde_json::json!({"errcode": "M_NOT_FOUND", "error": "Push rule not found"})))
+async fn get_pushrule(_auth: AuthenticatedUser) -> (http::StatusCode, Json<serde_json::Value>) {
+    (
+        http::StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"errcode": "M_NOT_FOUND", "error": "Push rule not found"})),
+    )
 }
 
-async fn delete_pushrule(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn delete_pushrule(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({}))
 }
 
-async fn set_pushrule_enabled(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn set_pushrule_enabled(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({}))
 }
 
-async fn get_pushrule_enabled(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn get_pushrule_enabled(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "enabled": true }))
 }
 
-async fn set_pushrule_actions(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn set_pushrule_actions(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({}))
 }
 
-async fn get_pushrule_actions(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn get_pushrule_actions(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "actions": ["notify"] }))
 }
 
-async fn get_turn_server(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn get_turn_server(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "uris": [],
         "username": "",
@@ -533,7 +526,9 @@ async fn delete_device(
         Ok(_) => {} // Device belongs to this user
         Err(StorageError::NotFound) => {
             // Device doesn't belong to this user — forbidden
-            return Err(MatrixError::forbidden("Cannot delete another user's device"));
+            return Err(MatrixError::forbidden(
+                "Cannot delete another user's device",
+            ));
         }
         Err(other) => return Err(crate::extractors::storage_error(other)),
     }
@@ -641,7 +636,8 @@ async fn get_room_members(
     // If user has left, only return members from before they left
     let membership = storage.get_membership(&sender, &room_id).await.ok();
     let leave_pos = if membership.as_deref() == Some("leave") {
-        storage.get_state_event(&room_id, "m.room.member", &sender)
+        storage
+            .get_state_event(&room_id, "m.room.member", &sender)
             .await
             .ok()
             .map(|e| e.stream_position)
@@ -657,18 +653,25 @@ async fn get_room_members(
             }
             // Filter out events after the user left
             if let Some(lp) = leave_pos
-                && e.stream_position > lp {
-                    return false;
-                }
-            let membership = e.content.get("membership").and_then(|m| m.as_str()).unwrap_or("");
+                && e.stream_position > lp
+            {
+                return false;
+            }
+            let membership = e
+                .content
+                .get("membership")
+                .and_then(|m| m.as_str())
+                .unwrap_or("");
             if let Some(ref filter) = query.membership
-                && membership != filter {
-                    return false;
-                }
+                && membership != filter
+            {
+                return false;
+            }
             if let Some(ref not_filter) = query.not_membership
-                && membership == not_filter {
-                    return false;
-                }
+                && membership == not_filter
+            {
+                return false;
+            }
             true
         })
         .map(|e| e.to_client_event())

@@ -5,16 +5,28 @@ use serde::Deserialize;
 
 use maelstrom_core::error::MatrixError;
 
-use crate::auth::AdminUser;
 use crate::AdminState;
+use crate::auth::AdminUser;
 
 pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/_maelstrom/admin/v1/media/user/{userId}", get(user_media))
-        .route("/_maelstrom/admin/v1/media/{serverName}/{mediaId}/quarantine", post(quarantine_media))
-        .route("/_maelstrom/admin/v1/media/{serverName}/{mediaId}/unquarantine", post(unquarantine_media))
-        .route("/_maelstrom/admin/v1/media/retention", get(get_retention_config).put(set_retention_config))
-        .route("/_maelstrom/admin/v1/media/retention/sweep", post(trigger_retention_sweep))
+        .route(
+            "/_maelstrom/admin/v1/media/{serverName}/{mediaId}/quarantine",
+            post(quarantine_media),
+        )
+        .route(
+            "/_maelstrom/admin/v1/media/{serverName}/{mediaId}/unquarantine",
+            post(unquarantine_media),
+        )
+        .route(
+            "/_maelstrom/admin/v1/media/retention",
+            get(get_retention_config).put(set_retention_config),
+        )
+        .route(
+            "/_maelstrom/admin/v1/media/retention/sweep",
+            post(trigger_retention_sweep),
+        )
 }
 
 async fn user_media(

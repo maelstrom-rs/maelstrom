@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use maelstrom_core::events::pdu::StoredEvent;
 use maelstrom_core::identifiers::{DeviceId, UserId};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::traits::*;
 
@@ -155,7 +155,11 @@ impl DeviceStore for MockStorage {
         Ok(())
     }
 
-    async fn get_device(&self, user_id: &UserId, device_id: &DeviceId) -> StorageResult<DeviceRecord> {
+    async fn get_device(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+    ) -> StorageResult<DeviceRecord> {
         let key = format!("{user_id}:{device_id}");
         self.devices
             .lock()
@@ -202,7 +206,11 @@ impl DeviceStore for MockStorage {
         Ok(())
     }
 
-    async fn remove_all_devices_except(&self, user_id: &UserId, keep_device_id: &DeviceId) -> StorageResult<()> {
+    async fn remove_all_devices_except(
+        &self,
+        user_id: &UserId,
+        keep_device_id: &DeviceId,
+    ) -> StorageResult<()> {
         let user_str = user_id.to_string();
         let keep = keep_device_id.to_string();
         self.devices
@@ -212,7 +220,12 @@ impl DeviceStore for MockStorage {
         Ok(())
     }
 
-    async fn update_device_display_name(&self, user_id: &UserId, device_id: &DeviceId, display_name: Option<&str>) -> StorageResult<()> {
+    async fn update_device_display_name(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+        display_name: Option<&str>,
+    ) -> StorageResult<()> {
         let key = format!("{user_id}:{device_id}");
         let mut devices = self.devices.lock().unwrap();
         if let Some(device) = devices.get_mut(&key) {
@@ -244,11 +257,16 @@ impl RoomStore for MockStorage {
             .ok_or(StorageError::NotFound)
     }
 
-    async fn set_membership(&self, user_id: &str, room_id: &str, membership: &str) -> StorageResult<()> {
-        self.membership
-            .lock()
-            .unwrap()
-            .insert((user_id.to_string(), room_id.to_string()), membership.to_string());
+    async fn set_membership(
+        &self,
+        user_id: &str,
+        room_id: &str,
+        membership: &str,
+    ) -> StorageResult<()> {
+        self.membership.lock().unwrap().insert(
+            (user_id.to_string(), room_id.to_string()),
+            membership.to_string(),
+        );
         Ok(())
     }
 
@@ -288,7 +306,11 @@ impl RoomStore for MockStorage {
             .collect())
     }
 
-    async fn get_room_members(&self, room_id: &str, membership: &str) -> StorageResult<Vec<String>> {
+    async fn get_room_members(
+        &self,
+        room_id: &str,
+        membership: &str,
+    ) -> StorageResult<Vec<String>> {
         let memberships = self.membership.lock().unwrap();
         Ok(memberships
             .iter()
@@ -302,7 +324,10 @@ impl RoomStore for MockStorage {
         if aliases.contains_key(alias) {
             return Err(StorageError::Duplicate(alias.to_string()));
         }
-        aliases.insert(alias.to_string(), (room_id.to_string(), creator.to_string()));
+        aliases.insert(
+            alias.to_string(),
+            (room_id.to_string(), creator.to_string()),
+        );
         Ok(())
     }
 
@@ -348,13 +373,22 @@ impl RoomStore for MockStorage {
         // We don't have a visibility field in RoomRecord, so we track it via room_state
         // by convention: (room_id, "__visibility", "") -> visibility
         self.room_state.lock().unwrap().insert(
-            (room_id.to_string(), "__visibility".to_string(), String::new()),
+            (
+                room_id.to_string(),
+                "__visibility".to_string(),
+                String::new(),
+            ),
             visibility.to_string(),
         );
         Ok(())
     }
 
-    async fn get_public_rooms(&self, limit: usize, since: Option<&str>, filter: Option<&str>) -> StorageResult<(Vec<PublicRoom>, usize)> {
+    async fn get_public_rooms(
+        &self,
+        limit: usize,
+        since: Option<&str>,
+        filter: Option<&str>,
+    ) -> StorageResult<(Vec<PublicRoom>, usize)> {
         let rooms = self.rooms.lock().unwrap();
         let room_state = self.room_state.lock().unwrap();
         let membership = self.membership.lock().unwrap();
@@ -381,13 +415,23 @@ impl RoomStore for MockStorage {
             let name = room_state
                 .get(&(rid.clone(), "m.room.name".to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
-                .and_then(|e| e.content.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                .and_then(|e| {
+                    e.content
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
 
             // Get topic from room_state
             let topic = room_state
                 .get(&(rid.clone(), "m.room.topic".to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
-                .and_then(|e| e.content.get("topic").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                .and_then(|e| {
+                    e.content
+                        .get("topic")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
 
             // Count joined members
             let num_joined = membership
@@ -397,7 +441,11 @@ impl RoomStore for MockStorage {
 
             // Check world_readable
             let world_readable = room_state
-                .get(&(rid.clone(), "m.room.history_visibility".to_string(), String::new()))
+                .get(&(
+                    rid.clone(),
+                    "m.room.history_visibility".to_string(),
+                    String::new(),
+                ))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| e.content.get("history_visibility").and_then(|v| v.as_str()))
                 .map(|v| v == "world_readable")
@@ -405,7 +453,11 @@ impl RoomStore for MockStorage {
 
             // Check guest_can_join
             let guest_can_join = room_state
-                .get(&(rid.clone(), "m.room.guest_access".to_string(), String::new()))
+                .get(&(
+                    rid.clone(),
+                    "m.room.guest_access".to_string(),
+                    String::new(),
+                ))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| e.content.get("guest_access").and_then(|v| v.as_str()))
                 .map(|v| v == "can_join")
@@ -414,8 +466,14 @@ impl RoomStore for MockStorage {
             // Apply filter
             if let Some(filter_str) = filter {
                 let filter_lower = filter_str.to_lowercase();
-                let matches = name.as_deref().map(|n| n.to_lowercase().contains(&filter_lower)).unwrap_or(false)
-                    || topic.as_deref().map(|t| t.to_lowercase().contains(&filter_lower)).unwrap_or(false);
+                let matches = name
+                    .as_deref()
+                    .map(|n| n.to_lowercase().contains(&filter_lower))
+                    .unwrap_or(false)
+                    || topic
+                        .as_deref()
+                        .map(|t| t.to_lowercase().contains(&filter_lower))
+                        .unwrap_or(false);
                 if !matches {
                     continue;
                 }
@@ -423,15 +481,29 @@ impl RoomStore for MockStorage {
 
             // Get canonical alias
             let canonical_alias = room_state
-                .get(&(rid.clone(), "m.room.canonical_alias".to_string(), String::new()))
+                .get(&(
+                    rid.clone(),
+                    "m.room.canonical_alias".to_string(),
+                    String::new(),
+                ))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
-                .and_then(|e| e.content.get("alias").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                .and_then(|e| {
+                    e.content
+                        .get("alias")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
 
             // Get avatar URL
             let avatar_url = room_state
                 .get(&(rid.clone(), "m.room.avatar".to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
-                .and_then(|e| e.content.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                .and_then(|e| {
+                    e.content
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
 
             public_rooms.push(PublicRoom {
                 room_id: rid.clone(),
@@ -456,10 +528,21 @@ impl RoomStore for MockStorage {
         Ok(())
     }
 
-    async fn store_room_upgrade(&self, old_room_id: &str, new_room_id: &str, _version: &str, _creator: &str, _tombstone_event_id: &str) -> StorageResult<()> {
+    async fn store_room_upgrade(
+        &self,
+        old_room_id: &str,
+        new_room_id: &str,
+        _version: &str,
+        _creator: &str,
+        _tombstone_event_id: &str,
+    ) -> StorageResult<()> {
         // Store upgrade edge in a simple map: new_room -> old_room (predecessor)
         self.room_state.lock().unwrap().insert(
-            (new_room_id.to_string(), "__predecessor".to_string(), String::new()),
+            (
+                new_room_id.to_string(),
+                "__predecessor".to_string(),
+                String::new(),
+            ),
             old_room_id.to_string(),
         );
         Ok(())
@@ -470,7 +553,9 @@ impl RoomStore for MockStorage {
         let mut predecessors = Vec::new();
         let mut current = room_id.to_string();
         for _ in 0..100 {
-            if let Some(pred) = state.get(&(current.clone(), "__predecessor".to_string(), String::new())) {
+            if let Some(pred) =
+                state.get(&(current.clone(), "__predecessor".to_string(), String::new()))
+            {
                 predecessors.push(pred.clone());
                 current = pred.clone();
             } else {
@@ -501,7 +586,13 @@ impl EventStore for MockStorage {
             .ok_or(StorageError::NotFound)
     }
 
-    async fn get_room_events(&self, room_id: &str, from: i64, limit: usize, dir: &str) -> StorageResult<Vec<StoredEvent>> {
+    async fn get_room_events(
+        &self,
+        room_id: &str,
+        from: i64,
+        limit: usize,
+        dir: &str,
+    ) -> StorageResult<Vec<StoredEvent>> {
         let events = self.events.lock().unwrap();
         match dir {
             "b" => {
@@ -540,14 +631,21 @@ impl EventStore for MockStorage {
         Ok(result)
     }
 
-    async fn set_room_state(&self, room_id: &str, event_type: &str, state_key: &str, event_id: &str) -> StorageResult<()> {
-        self.room_state
-            .lock()
-            .unwrap()
-            .insert(
-                (room_id.to_string(), event_type.to_string(), state_key.to_string()),
-                event_id.to_string(),
-            );
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        event_id: &str,
+    ) -> StorageResult<()> {
+        self.room_state.lock().unwrap().insert(
+            (
+                room_id.to_string(),
+                event_type.to_string(),
+                state_key.to_string(),
+            ),
+            event_id.to_string(),
+        );
         Ok(())
     }
 
@@ -570,10 +668,19 @@ impl EventStore for MockStorage {
         Ok(result)
     }
 
-    async fn get_state_event(&self, room_id: &str, event_type: &str, state_key: &str) -> StorageResult<StoredEvent> {
+    async fn get_state_event(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> StorageResult<StoredEvent> {
         let room_state = self.room_state.lock().unwrap();
         let event_id = room_state
-            .get(&(room_id.to_string(), event_type.to_string(), state_key.to_string()))
+            .get(&(
+                room_id.to_string(),
+                event_type.to_string(),
+                state_key.to_string(),
+            ))
             .ok_or(StorageError::NotFound)?
             .clone();
         drop(room_state);
@@ -586,7 +693,13 @@ impl EventStore for MockStorage {
             .ok_or(StorageError::NotFound)
     }
 
-    async fn get_state_event_at(&self, room_id: &str, event_type: &str, state_key: &str, at_position: i64) -> StorageResult<StoredEvent> {
+    async fn get_state_event_at(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        at_position: i64,
+    ) -> StorageResult<StoredEvent> {
         let events = self.events.lock().unwrap();
         events
             .iter()
@@ -609,11 +722,16 @@ impl EventStore for MockStorage {
         Ok(self.stream_position.load(Ordering::SeqCst))
     }
 
-    async fn store_txn_id(&self, device_id: &str, txn_id: &str, event_id: &str) -> StorageResult<()> {
-        self.txn_ids
-            .lock()
-            .unwrap()
-            .insert((device_id.to_string(), txn_id.to_string()), event_id.to_string());
+    async fn store_txn_id(
+        &self,
+        device_id: &str,
+        txn_id: &str,
+        event_id: &str,
+    ) -> StorageResult<()> {
+        self.txn_ids.lock().unwrap().insert(
+            (device_id.to_string(), txn_id.to_string()),
+            event_id.to_string(),
+        );
         Ok(())
     }
 
@@ -626,7 +744,12 @@ impl EventStore for MockStorage {
             .cloned())
     }
 
-    async fn search_events(&self, room_ids: &[String], query: &str, limit: usize) -> StorageResult<Vec<StoredEvent>> {
+    async fn search_events(
+        &self,
+        room_ids: &[String],
+        query: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<StoredEvent>> {
         let events = self.events.lock().unwrap();
         let query_lower = query.to_lowercase();
         let results: Vec<StoredEvent> = events
@@ -639,7 +762,8 @@ impl EventStore for MockStorage {
                         .map(|body| body.to_lowercase().contains(&query_lower))
                         .unwrap_or(false)
             })
-            .take(limit).cloned()
+            .take(limit)
+            .cloned()
             .collect();
         Ok(results)
     }
@@ -655,14 +779,24 @@ impl EventStore for MockStorage {
 
 #[async_trait]
 impl ReceiptStore for MockStorage {
-    async fn set_receipt(&self, user_id: &str, room_id: &str, receipt_type: &str, event_id: &str) -> StorageResult<()> {
+    async fn set_receipt(
+        &self,
+        user_id: &str,
+        room_id: &str,
+        receipt_type: &str,
+        event_id: &str,
+    ) -> StorageResult<()> {
         let mut map = self.receipts.lock().unwrap();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
         map.insert(
-            (user_id.to_string(), room_id.to_string(), receipt_type.to_string()),
+            (
+                user_id.to_string(),
+                room_id.to_string(),
+                receipt_type.to_string(),
+            ),
             (event_id.to_string(), now_ms),
         );
         Ok(())
@@ -683,10 +817,14 @@ impl ReceiptStore for MockStorage {
     }
 }
 
-
 #[async_trait]
 impl KeyStore for MockStorage {
-    async fn set_device_keys(&self, user_id: &str, device_id: &str, keys: &serde_json::Value) -> StorageResult<()> {
+    async fn set_device_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()> {
         let mut map = self.device_keys.lock().unwrap();
         map.insert((user_id.to_string(), device_id.to_string()), keys.clone());
         Ok(())
@@ -709,7 +847,12 @@ impl KeyStore for MockStorage {
         Ok(serde_json::Value::Object(result))
     }
 
-    async fn store_one_time_keys(&self, user_id: &str, device_id: &str, keys: &serde_json::Value) -> StorageResult<()> {
+    async fn store_one_time_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()> {
         let mut map = self.one_time_keys.lock().unwrap();
         if let Some(obj) = keys.as_object() {
             for (key_id, key_data) in obj {
@@ -722,19 +865,28 @@ impl KeyStore for MockStorage {
         Ok(())
     }
 
-    async fn count_one_time_keys(&self, user_id: &str, device_id: &str) -> StorageResult<serde_json::Value> {
+    async fn count_one_time_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+    ) -> StorageResult<serde_json::Value> {
         let map = self.one_time_keys.lock().unwrap();
         let mut counts: HashMap<String, i64> = HashMap::new();
         for (u, d, key_id) in map.keys() {
-            if u == user_id && d == device_id
-                && let Some(algo) = key_id.split(':').next() {
-                    *counts.entry(algo.to_string()).or_insert(0) += 1;
-                }
+            if u == user_id
+                && d == device_id
+                && let Some(algo) = key_id.split(':').next()
+            {
+                *counts.entry(algo.to_string()).or_insert(0) += 1;
+            }
         }
         Ok(serde_json::to_value(counts).unwrap_or_default())
     }
 
-    async fn claim_one_time_keys(&self, claims: &serde_json::Value) -> StorageResult<serde_json::Value> {
+    async fn claim_one_time_keys(
+        &self,
+        claims: &serde_json::Value,
+    ) -> StorageResult<serde_json::Value> {
         let mut map = self.one_time_keys.lock().unwrap();
         let mut result = serde_json::Map::new();
 
@@ -747,7 +899,9 @@ impl KeyStore for MockStorage {
                         // Find one key matching this user/device/algorithm
                         let found_key = map
                             .keys()
-                            .find(|(u, d, kid)| u == uid && d == did && kid.starts_with(&format!("{algo}:")))
+                            .find(|(u, d, kid)| {
+                                u == uid && d == did && kid.starts_with(&format!("{algo}:"))
+                            })
                             .cloned();
 
                         if let Some(key) = found_key {
@@ -755,7 +909,8 @@ impl KeyStore for MockStorage {
                             if let Some(key_data) = map.remove(&key) {
                                 let mut device_keys = serde_json::Map::new();
                                 device_keys.insert(key_id, key_data);
-                                user_result.insert(did.clone(), serde_json::Value::Object(device_keys));
+                                user_result
+                                    .insert(did.clone(), serde_json::Value::Object(device_keys));
                             }
                         }
                     }
@@ -769,7 +924,11 @@ impl KeyStore for MockStorage {
         Ok(serde_json::Value::Object(result))
     }
 
-    async fn set_cross_signing_keys(&self, user_id: &str, keys: &serde_json::Value) -> StorageResult<()> {
+    async fn set_cross_signing_keys(
+        &self,
+        user_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()> {
         let mut map = self.cross_signing_keys.lock().unwrap();
         if let Some(obj) = keys.as_object() {
             for (key_type, key_data) in obj {
@@ -816,7 +975,12 @@ impl ToDeviceStore for MockStorage {
         Ok(())
     }
 
-    async fn get_to_device_messages(&self, user_id: &str, device_id: &str, since: i64) -> StorageResult<Vec<serde_json::Value>> {
+    async fn get_to_device_messages(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        since: i64,
+    ) -> StorageResult<Vec<serde_json::Value>> {
         let msgs = self.to_device_messages.lock().unwrap();
         Ok(msgs
             .iter()
@@ -825,7 +989,12 @@ impl ToDeviceStore for MockStorage {
             .collect())
     }
 
-    async fn delete_to_device_messages(&self, user_id: &str, device_id: &str, up_to: i64) -> StorageResult<()> {
+    async fn delete_to_device_messages(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        up_to: i64,
+    ) -> StorageResult<()> {
         let mut msgs = self.to_device_messages.lock().unwrap();
         msgs.retain(|(u, d, pos, _)| !(u == user_id && d == device_id && *pos <= up_to));
         Ok(())
@@ -834,7 +1003,13 @@ impl ToDeviceStore for MockStorage {
 
 #[async_trait]
 impl AccountDataStore for MockStorage {
-    async fn set_account_data(&self, user_id: &str, room_id: Option<&str>, data_type: &str, content: &serde_json::Value) -> StorageResult<()> {
+    async fn set_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+        content: &serde_json::Value,
+    ) -> StorageResult<()> {
         let room_key = room_id.unwrap_or("").to_string();
         self.account_data.lock().unwrap().insert(
             (user_id.to_string(), room_key, data_type.to_string()),
@@ -843,7 +1018,12 @@ impl AccountDataStore for MockStorage {
         Ok(())
     }
 
-    async fn get_account_data(&self, user_id: &str, room_id: Option<&str>, data_type: &str) -> StorageResult<serde_json::Value> {
+    async fn get_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+    ) -> StorageResult<serde_json::Value> {
         let room_key = room_id.unwrap_or("").to_string();
         self.account_data
             .lock()
@@ -887,10 +1067,12 @@ impl RelationStore for MockStorage {
         let store = self.relations.lock().unwrap();
         let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         for r in store.iter() {
-            if r.parent_id == parent_id && r.rel_type == "m.annotation"
-                && let Some(key) = &r.content_key {
-                    *counts.entry(key.clone()).or_default() += 1;
-                }
+            if r.parent_id == parent_id
+                && r.rel_type == "m.annotation"
+                && let Some(key) = &r.content_key
+            {
+                *counts.entry(key.clone()).or_default() += 1;
+            }
         }
         Ok(counts.into_iter().collect())
     }
@@ -904,7 +1086,12 @@ impl RelationStore for MockStorage {
             .map(|r| r.event_id.clone()))
     }
 
-    async fn get_thread_roots(&self, room_id: &str, limit: usize, _from: Option<i64>) -> StorageResult<Vec<String>> {
+    async fn get_thread_roots(
+        &self,
+        room_id: &str,
+        limit: usize,
+        _from: Option<i64>,
+    ) -> StorageResult<Vec<String>> {
         let store = self.relations.lock().unwrap();
         let mut roots: Vec<String> = store
             .iter()
@@ -952,7 +1139,10 @@ impl FederationKeyStore for MockStorage {
         Ok(())
     }
 
-    async fn get_remote_server_keys(&self, server_name: &str) -> StorageResult<Vec<RemoteKeyRecord>> {
+    async fn get_remote_server_keys(
+        &self,
+        server_name: &str,
+    ) -> StorageResult<Vec<RemoteKeyRecord>> {
         let store = self.remote_keys.lock().unwrap();
         Ok(store.get(server_name).cloned().unwrap_or_default())
     }
@@ -993,7 +1183,11 @@ impl MediaStore for MockStorage {
             .ok_or(StorageError::NotFound)
     }
 
-    async fn list_user_media(&self, user_id: &str, limit: usize) -> StorageResult<Vec<MediaRecord>> {
+    async fn list_user_media(
+        &self,
+        user_id: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<MediaRecord>> {
         let store = self.media.lock().unwrap();
         let mut records: Vec<MediaRecord> = store
             .values()
@@ -1005,7 +1199,12 @@ impl MediaStore for MockStorage {
         Ok(records)
     }
 
-    async fn set_media_quarantined(&self, server_name: &str, media_id: &str, quarantined: bool) -> StorageResult<()> {
+    async fn set_media_quarantined(
+        &self,
+        server_name: &str,
+        media_id: &str,
+        quarantined: bool,
+    ) -> StorageResult<()> {
         let mut store = self.media.lock().unwrap();
         let key = (server_name.to_string(), media_id.to_string());
         let record = store.get_mut(&key).ok_or(StorageError::NotFound)?;
@@ -1020,7 +1219,11 @@ impl MediaStore for MockStorage {
         Ok(())
     }
 
-    async fn list_media_before(&self, before: chrono::DateTime<chrono::Utc>, limit: usize) -> StorageResult<Vec<MediaRecord>> {
+    async fn list_media_before(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<MediaRecord>> {
         let store = self.media.lock().unwrap();
         let mut records: Vec<MediaRecord> = store
             .values()

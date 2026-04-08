@@ -76,7 +76,10 @@ async fn test_set_display_name() {
     let store = MockStorage::new();
     store.create_user(&test_user("alice")).await.unwrap();
 
-    store.set_display_name("alice", Some("Alice")).await.unwrap();
+    store
+        .set_display_name("alice", Some("Alice"))
+        .await
+        .unwrap();
 
     let profile = store.get_profile("alice").await.unwrap();
     assert_eq!(profile.display_name.as_deref(), Some("Alice"));

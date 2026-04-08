@@ -7,12 +7,8 @@ async fn test_media_config_returns_upload_size() {
     let router = common::test_router();
     let (token, _, _) = common::register_user(&router, "mediauser", "pass").await;
 
-    let (status, resp) = common::get_authed(
-        &router,
-        "/_matrix/client/v1/media/config",
-        &token,
-    )
-    .await;
+    let (status, resp) =
+        common::get_authed(&router, "/_matrix/client/v1/media/config", &token).await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -25,12 +21,7 @@ async fn test_media_config_legacy_endpoint() {
     let router = common::test_router();
     let (token, _, _) = common::register_user(&router, "legacymedia", "pass").await;
 
-    let (status, resp) = common::get_authed(
-        &router,
-        "/_matrix/media/v3/config",
-        &token,
-    )
-    .await;
+    let (status, resp) = common::get_authed(&router, "/_matrix/media/v3/config", &token).await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -41,11 +32,7 @@ async fn test_media_config_legacy_endpoint() {
 async fn test_media_config_requires_auth() {
     let router = common::test_router();
 
-    let (status, resp) = common::get(
-        &router,
-        "/_matrix/client/v1/media/config",
-    )
-    .await;
+    let (status, resp) = common::get(&router, "/_matrix/client/v1/media/config").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -66,7 +53,9 @@ async fn test_upload_fails_without_media_store() {
         .body(axum::body::Body::from(vec![0u8; 100]))
         .unwrap();
 
-    let response = tower::ServiceExt::oneshot(router.clone(), req).await.unwrap();
+    let response = tower::ServiceExt::oneshot(router.clone(), req)
+        .await
+        .unwrap();
     let status = response.status();
     // Should return 500 because media store is not configured in test state
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

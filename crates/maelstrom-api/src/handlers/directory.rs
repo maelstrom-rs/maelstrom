@@ -13,7 +13,9 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
             "/_matrix/client/v3/directory/room/{roomAlias}",
-            put(set_room_alias).get(get_room_alias).delete(delete_room_alias),
+            put(set_room_alias)
+                .get(get_room_alias)
+                .delete(delete_room_alias),
         )
         .route(
             "/_matrix/client/v3/rooms/{roomId}/aliases",
@@ -46,13 +48,10 @@ async fn set_room_alias(
     let sender = auth.user_id.to_string();
 
     // Verify the room exists
-    storage
-        .get_room(&body.room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::not_found("Room not found"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    storage.get_room(&body.room_id).await.map_err(|e| match e {
+        StorageError::NotFound => MatrixError::not_found("Room not found"),
+        other => crate::extractors::storage_error(other),
+    })?;
 
     storage
         .set_room_alias(&room_alias, &body.room_id, &sender)
@@ -208,13 +207,10 @@ async fn set_room_visibility(
     let storage = state.storage();
 
     // Verify room exists
-    storage
-        .get_room(&room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::not_found("Room not found"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    storage.get_room(&room_id).await.map_err(|e| match e {
+        StorageError::NotFound => MatrixError::not_found("Room not found"),
+        other => crate::extractors::storage_error(other),
+    })?;
 
     storage
         .set_room_visibility(&room_id, &body.visibility)
@@ -269,7 +265,11 @@ async fn get_public_rooms(
         .map_err(crate::extractors::storage_error)?;
 
     let next_batch = if rooms.len() >= limit {
-        let start = query.since.as_deref().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+        let start = query
+            .since
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
         Some((start + rooms.len()).to_string())
     } else {
         None
@@ -317,7 +317,10 @@ async fn search_public_rooms(
 ) -> Result<Json<PublicRoomsResponse>, MatrixError> {
     let storage = state.storage();
     let limit = body.limit.unwrap_or(20).min(100);
-    let filter_term = body.filter.as_ref().and_then(|f| f.generic_search_term.as_deref());
+    let filter_term = body
+        .filter
+        .as_ref()
+        .and_then(|f| f.generic_search_term.as_deref());
 
     let (rooms, total) = storage
         .get_public_rooms(limit, body.since.as_deref(), filter_term)
@@ -325,7 +328,11 @@ async fn search_public_rooms(
         .map_err(crate::extractors::storage_error)?;
 
     let next_batch = if rooms.len() >= limit {
-        let start = body.since.as_deref().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+        let start = body
+            .since
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
         Some((start + rooms.len()).to_string())
     } else {
         None

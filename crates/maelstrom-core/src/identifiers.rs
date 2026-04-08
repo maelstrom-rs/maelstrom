@@ -183,8 +183,5 @@ impl_display!(UserId, RoomId, EventId, DeviceId, ServerName, RoomAlias);
 #[derive(Debug, thiserror::Error)]
 pub enum IdentifierError {
     #[error("Invalid {kind} format: {value}")]
-    InvalidFormat {
-        kind: &'static str,
-        value: String,
-    },
+    InvalidFormat { kind: &'static str, value: String },
 }

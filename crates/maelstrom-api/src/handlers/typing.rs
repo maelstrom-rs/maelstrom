@@ -33,9 +33,7 @@ async fn set_typing(
 
     // Check that the authenticated user matches the path user
     if sender != user_id {
-        return Err(MatrixError::forbidden(
-            "Cannot set typing for another user",
-        ));
+        return Err(MatrixError::forbidden("Cannot set typing for another user"));
     }
 
     let timeout_ms = body.timeout.unwrap_or(30000);

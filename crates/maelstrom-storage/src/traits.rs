@@ -97,13 +97,26 @@ pub trait UserStore: Send + Sync {
 #[async_trait]
 pub trait DeviceStore: Send + Sync {
     async fn create_device(&self, device: &DeviceRecord) -> StorageResult<()>;
-    async fn get_device(&self, user_id: &UserId, device_id: &DeviceId) -> StorageResult<DeviceRecord>;
+    async fn get_device(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+    ) -> StorageResult<DeviceRecord>;
     async fn get_device_by_token(&self, access_token: &str) -> StorageResult<DeviceRecord>;
     async fn list_devices(&self, user_id: &UserId) -> StorageResult<Vec<DeviceRecord>>;
     async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) -> StorageResult<()>;
     async fn remove_all_devices(&self, user_id: &UserId) -> StorageResult<()>;
-    async fn remove_all_devices_except(&self, user_id: &UserId, keep_device_id: &DeviceId) -> StorageResult<()>;
-    async fn update_device_display_name(&self, user_id: &UserId, device_id: &DeviceId, display_name: Option<&str>) -> StorageResult<()>;
+    async fn remove_all_devices_except(
+        &self,
+        user_id: &UserId,
+        keep_device_id: &DeviceId,
+    ) -> StorageResult<()>;
+    async fn update_device_display_name(
+        &self,
+        user_id: &UserId,
+        device_id: &DeviceId,
+        display_name: Option<&str>,
+    ) -> StorageResult<()>;
 }
 
 /// Room storage operations.
@@ -111,23 +124,41 @@ pub trait DeviceStore: Send + Sync {
 pub trait RoomStore: Send + Sync {
     async fn create_room(&self, room: &RoomRecord) -> StorageResult<()>;
     async fn get_room(&self, room_id: &str) -> StorageResult<RoomRecord>;
-    async fn set_membership(&self, user_id: &str, room_id: &str, membership: &str) -> StorageResult<()>;
+    async fn set_membership(
+        &self,
+        user_id: &str,
+        room_id: &str,
+        membership: &str,
+    ) -> StorageResult<()>;
     async fn get_membership(&self, user_id: &str, room_id: &str) -> StorageResult<String>;
     async fn get_joined_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
     async fn get_invited_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
     async fn get_left_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
-    async fn get_room_members(&self, room_id: &str, membership: &str) -> StorageResult<Vec<String>>;
+    async fn get_room_members(&self, room_id: &str, membership: &str)
+    -> StorageResult<Vec<String>>;
     async fn set_room_alias(&self, alias: &str, room_id: &str, creator: &str) -> StorageResult<()>;
     async fn get_room_alias(&self, alias: &str) -> StorageResult<String>;
     async fn get_room_alias_creator(&self, alias: &str) -> StorageResult<String>;
     async fn delete_room_alias(&self, alias: &str) -> StorageResult<()>;
     async fn get_room_aliases(&self, room_id: &str) -> StorageResult<Vec<String>>;
     async fn set_room_visibility(&self, room_id: &str, visibility: &str) -> StorageResult<()>;
-    async fn get_public_rooms(&self, limit: usize, since: Option<&str>, filter: Option<&str>) -> StorageResult<(Vec<PublicRoom>, usize)>;
+    async fn get_public_rooms(
+        &self,
+        limit: usize,
+        since: Option<&str>,
+        filter: Option<&str>,
+    ) -> StorageResult<(Vec<PublicRoom>, usize)>;
     async fn forget_room(&self, user_id: &str, room_id: &str) -> StorageResult<()>;
 
     /// Store a room upgrade edge: old_room --upgrades_to--> new_room.
-    async fn store_room_upgrade(&self, old_room_id: &str, new_room_id: &str, version: &str, creator: &str, tombstone_event_id: &str) -> StorageResult<()>;
+    async fn store_room_upgrade(
+        &self,
+        old_room_id: &str,
+        new_room_id: &str,
+        version: &str,
+        creator: &str,
+        tombstone_event_id: &str,
+    ) -> StorageResult<()>;
 
     /// Get all predecessor room IDs by traversing the upgrade chain backward.
     /// Returns rooms in order from most recent predecessor to oldest.
@@ -145,22 +176,45 @@ pub trait EventStore: Send + Sync {
 
     /// Get events in a room, ordered by stream_position, with pagination.
     /// `from` is exclusive (events after this position), `dir` is "f" (forward) or "b" (backward).
-    async fn get_room_events(&self, room_id: &str, from: i64, limit: usize, dir: &str) -> StorageResult<Vec<StoredEvent>>;
+    async fn get_room_events(
+        &self,
+        room_id: &str,
+        from: i64,
+        limit: usize,
+        dir: &str,
+    ) -> StorageResult<Vec<StoredEvent>>;
 
     /// Get all events across all rooms since a stream position (for incremental sync).
     async fn get_events_since(&self, since: i64) -> StorageResult<Vec<StoredEvent>>;
 
     /// Update the current room state map for a state event.
-    async fn set_room_state(&self, room_id: &str, event_type: &str, state_key: &str, event_id: &str) -> StorageResult<()>;
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        event_id: &str,
+    ) -> StorageResult<()>;
 
     /// Get the current state events for a room.
     async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<StoredEvent>>;
 
     /// Get a specific state event from the current room state.
-    async fn get_state_event(&self, room_id: &str, event_type: &str, state_key: &str) -> StorageResult<StoredEvent>;
+    async fn get_state_event(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> StorageResult<StoredEvent>;
 
     /// Get a state event as it was at a given stream position (for departed rooms).
-    async fn get_state_event_at(&self, room_id: &str, event_type: &str, state_key: &str, at_position: i64) -> StorageResult<StoredEvent>;
+    async fn get_state_event_at(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        at_position: i64,
+    ) -> StorageResult<StoredEvent>;
 
     /// Get the next stream position (atomically incremented).
     async fn next_stream_position(&self) -> StorageResult<i64>;
@@ -169,14 +223,24 @@ pub trait EventStore: Send + Sync {
     async fn current_stream_position(&self) -> StorageResult<i64>;
 
     /// Store a txn_id -> event_id mapping for deduplication.
-    async fn store_txn_id(&self, device_id: &str, txn_id: &str, event_id: &str) -> StorageResult<()>;
+    async fn store_txn_id(
+        &self,
+        device_id: &str,
+        txn_id: &str,
+        event_id: &str,
+    ) -> StorageResult<()>;
 
     /// Look up an event_id by txn_id for deduplication.
     async fn get_txn_event(&self, device_id: &str, txn_id: &str) -> StorageResult<Option<String>>;
 
     /// Full-text search across message events in the given rooms.
     /// Returns events matching the query, ordered by relevance.
-    async fn search_events(&self, room_ids: &[String], query: &str, limit: usize) -> StorageResult<Vec<StoredEvent>>;
+    async fn search_events(
+        &self,
+        room_ids: &[String],
+        query: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<StoredEvent>>;
 
     /// Redact an event — clear its content to `{}`.
     async fn redact_event(&self, event_id: &str) -> StorageResult<()>;
@@ -185,7 +249,13 @@ pub trait EventStore: Send + Sync {
 /// Read receipt storage.
 #[async_trait]
 pub trait ReceiptStore: Send + Sync {
-    async fn set_receipt(&self, user_id: &str, room_id: &str, receipt_type: &str, event_id: &str) -> StorageResult<()>;
+    async fn set_receipt(
+        &self,
+        user_id: &str,
+        room_id: &str,
+        receipt_type: &str,
+        event_id: &str,
+    ) -> StorageResult<()>;
     async fn get_receipts(&self, room_id: &str) -> StorageResult<Vec<ReceiptRecord>>;
 }
 
@@ -202,24 +272,45 @@ pub struct ReceiptRecord {
 #[async_trait]
 pub trait KeyStore: Send + Sync {
     /// Store/update device keys for a user's device.
-    async fn set_device_keys(&self, user_id: &str, device_id: &str, keys: &serde_json::Value) -> StorageResult<()>;
+    async fn set_device_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()>;
 
     /// Get device keys for a list of users. Returns map: user_id -> { device_id -> keys }
     async fn get_device_keys(&self, user_ids: &[String]) -> StorageResult<serde_json::Value>;
 
     /// Store one-time keys. Keys is a map of key_id -> key_data.
-    async fn store_one_time_keys(&self, user_id: &str, device_id: &str, keys: &serde_json::Value) -> StorageResult<()>;
+    async fn store_one_time_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()>;
 
     /// Count one-time keys by algorithm for a user's device.
-    async fn count_one_time_keys(&self, user_id: &str, device_id: &str) -> StorageResult<serde_json::Value>;
+    async fn count_one_time_keys(
+        &self,
+        user_id: &str,
+        device_id: &str,
+    ) -> StorageResult<serde_json::Value>;
 
     /// Claim one-time keys. Takes map: user_id -> { device_id -> algorithm }.
     /// Returns map: user_id -> { device_id -> { key_id -> key_data } }.
     /// Claimed keys are deleted from storage.
-    async fn claim_one_time_keys(&self, claims: &serde_json::Value) -> StorageResult<serde_json::Value>;
+    async fn claim_one_time_keys(
+        &self,
+        claims: &serde_json::Value,
+    ) -> StorageResult<serde_json::Value>;
 
     /// Store cross-signing keys (master, self_signing, user_signing).
-    async fn set_cross_signing_keys(&self, user_id: &str, keys: &serde_json::Value) -> StorageResult<()>;
+    async fn set_cross_signing_keys(
+        &self,
+        user_id: &str,
+        keys: &serde_json::Value,
+    ) -> StorageResult<()>;
 
     /// Get cross-signing keys for a user.
     async fn get_cross_signing_keys(&self, user_id: &str) -> StorageResult<serde_json::Value>;
@@ -229,20 +320,48 @@ pub trait KeyStore: Send + Sync {
 #[async_trait]
 pub trait ToDeviceStore: Send + Sync {
     /// Store a to-device message for delivery.
-    async fn store_to_device(&self, target_user_id: &str, target_device_id: &str, sender: &str, event_type: &str, content: &serde_json::Value) -> StorageResult<()>;
+    async fn store_to_device(
+        &self,
+        target_user_id: &str,
+        target_device_id: &str,
+        sender: &str,
+        event_type: &str,
+        content: &serde_json::Value,
+    ) -> StorageResult<()>;
 
     /// Get pending to-device messages for a user's device since a position.
-    async fn get_to_device_messages(&self, user_id: &str, device_id: &str, since: i64) -> StorageResult<Vec<serde_json::Value>>;
+    async fn get_to_device_messages(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        since: i64,
+    ) -> StorageResult<Vec<serde_json::Value>>;
 
     /// Delete to-device messages up to a position (after client acknowledges via sync).
-    async fn delete_to_device_messages(&self, user_id: &str, device_id: &str, up_to: i64) -> StorageResult<()>;
+    async fn delete_to_device_messages(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        up_to: i64,
+    ) -> StorageResult<()>;
 }
 
 /// Account data storage (global and per-room).
 #[async_trait]
 pub trait AccountDataStore: Send + Sync {
-    async fn set_account_data(&self, user_id: &str, room_id: Option<&str>, data_type: &str, content: &serde_json::Value) -> StorageResult<()>;
-    async fn get_account_data(&self, user_id: &str, room_id: Option<&str>, data_type: &str) -> StorageResult<serde_json::Value>;
+    async fn set_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+        content: &serde_json::Value,
+    ) -> StorageResult<()>;
+    async fn get_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+    ) -> StorageResult<serde_json::Value>;
 }
 
 /// Media metadata record.
@@ -269,16 +388,26 @@ pub trait MediaStore: Send + Sync {
     async fn get_media(&self, server_name: &str, media_id: &str) -> StorageResult<MediaRecord>;
 
     /// List media uploaded by a user.
-    async fn list_user_media(&self, user_id: &str, limit: usize) -> StorageResult<Vec<MediaRecord>>;
+    async fn list_user_media(&self, user_id: &str, limit: usize)
+    -> StorageResult<Vec<MediaRecord>>;
 
     /// Quarantine or unquarantine media.
-    async fn set_media_quarantined(&self, server_name: &str, media_id: &str, quarantined: bool) -> StorageResult<()>;
+    async fn set_media_quarantined(
+        &self,
+        server_name: &str,
+        media_id: &str,
+        quarantined: bool,
+    ) -> StorageResult<()>;
 
     /// Delete media metadata.
     async fn delete_media(&self, server_name: &str, media_id: &str) -> StorageResult<()>;
 
     /// List media older than a given timestamp (for retention cleanup).
-    async fn list_media_before(&self, before: chrono::DateTime<chrono::Utc>, limit: usize) -> StorageResult<Vec<MediaRecord>>;
+    async fn list_media_before(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> StorageResult<Vec<MediaRecord>>;
 }
 
 /// A server signing key record.
@@ -307,7 +436,10 @@ pub trait FederationKeyStore: Send + Sync {
     async fn get_server_key(&self, key_id: &str) -> StorageResult<ServerKeyRecord>;
     async fn get_active_server_keys(&self) -> StorageResult<Vec<ServerKeyRecord>>;
     async fn store_remote_server_keys(&self, keys: &[RemoteKeyRecord]) -> StorageResult<()>;
-    async fn get_remote_server_keys(&self, server_name: &str) -> StorageResult<Vec<RemoteKeyRecord>>;
+    async fn get_remote_server_keys(
+        &self,
+        server_name: &str,
+    ) -> StorageResult<Vec<RemoteKeyRecord>>;
     async fn store_federation_txn(&self, origin: &str, txn_id: &str) -> StorageResult<()>;
     async fn has_federation_txn(&self, origin: &str, txn_id: &str) -> StorageResult<bool>;
 }
@@ -359,7 +491,12 @@ pub trait RelationStore: Send + Sync {
     async fn get_latest_edit(&self, event_id: &str) -> StorageResult<Option<String>>;
 
     /// Get thread roots in a room (events that have `m.thread` children).
-    async fn get_thread_roots(&self, room_id: &str, limit: usize, from: Option<i64>) -> StorageResult<Vec<String>>;
+    async fn get_thread_roots(
+        &self,
+        room_id: &str,
+        limit: usize,
+        from: Option<i64>,
+    ) -> StorageResult<Vec<String>>;
 
     /// Store an event report.
     async fn store_report(&self, report: &ReportRecord) -> StorageResult<()>;
@@ -372,7 +509,41 @@ pub trait HealthCheck: Send + Sync {
 }
 
 /// Combined storage trait for the complete storage backend.
-pub trait Storage: UserStore + DeviceStore + RoomStore + EventStore + ReceiptStore + KeyStore + ToDeviceStore + AccountDataStore + MediaStore + FederationKeyStore + RelationStore + HealthCheck + Send + Sync + 'static {}
+pub trait Storage:
+    UserStore
+    + DeviceStore
+    + RoomStore
+    + EventStore
+    + ReceiptStore
+    + KeyStore
+    + ToDeviceStore
+    + AccountDataStore
+    + MediaStore
+    + FederationKeyStore
+    + RelationStore
+    + HealthCheck
+    + Send
+    + Sync
+    + 'static
+{
+}
 
 /// Blanket implementation.
-impl<T> Storage for T where T: UserStore + DeviceStore + RoomStore + EventStore + ReceiptStore + KeyStore + ToDeviceStore + AccountDataStore + MediaStore + FederationKeyStore + RelationStore + HealthCheck + Send + Sync + 'static {}
+impl<T> Storage for T where
+    T: UserStore
+        + DeviceStore
+        + RoomStore
+        + EventStore
+        + ReceiptStore
+        + KeyStore
+        + ToDeviceStore
+        + AccountDataStore
+        + MediaStore
+        + FederationKeyStore
+        + RelationStore
+        + HealthCheck
+        + Send
+        + Sync
+        + 'static
+{
+}

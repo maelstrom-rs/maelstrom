@@ -5,8 +5,8 @@ use axum::{Json, Router};
 use maelstrom_core::error::MatrixError;
 use sysinfo::System;
 
-use crate::auth::AdminUser;
 use crate::AdminState;
+use crate::auth::AdminUser;
 
 pub fn routes() -> Router<AdminState> {
     Router::new()

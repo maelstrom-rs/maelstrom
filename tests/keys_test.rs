@@ -24,13 +24,8 @@ async fn test_upload_device_keys() {
         }
     });
 
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/keys/upload",
-        &keys,
-        &token,
-    )
-    .await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/keys/upload", &keys, &token).await;
     assert_eq!(status, StatusCode::OK, "Upload keys failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -49,13 +44,8 @@ async fn test_upload_one_time_keys() {
         }
     });
 
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/keys/upload",
-        &keys,
-        &token,
-    )
-    .await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/keys/upload", &keys, &token).await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -87,13 +77,8 @@ async fn test_query_device_keys() {
         }
     });
 
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/keys/query",
-        &query,
-        &token,
-    )
-    .await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/keys/query", &query, &token).await;
     assert_eq!(status, StatusCode::OK, "Query keys failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -123,13 +108,8 @@ async fn test_claim_one_time_keys() {
         }
     });
 
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/keys/claim",
-        &claim,
-        &token1,
-    )
-    .await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/keys/claim", &claim, &token1).await;
     assert_eq!(status, StatusCode::OK, "Claim keys failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -161,5 +141,9 @@ async fn test_upload_cross_signing_keys() {
         &token,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "Upload cross-signing keys failed: {resp}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Upload cross-signing keys failed: {resp}"
+    );
 }

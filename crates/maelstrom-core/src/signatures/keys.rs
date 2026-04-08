@@ -118,26 +118,23 @@ mod tests {
         let message = b"test message";
         let sig = kp.sign(message);
 
-        assert!(verify_signature(
-            &kp.public_key_bytes(),
-            message,
-            &sig
-        ));
+        assert!(verify_signature(&kp.public_key_bytes(), message, &sig));
     }
 
     #[test]
     fn test_from_bytes_roundtrip() {
         let kp = KeyPair::generate();
-        let restored = KeyPair::from_bytes(
-            kp.key_id().to_string(),
-            kp.private_key_bytes(),
-        );
+        let restored = KeyPair::from_bytes(kp.key_id().to_string(), kp.private_key_bytes());
 
         assert_eq!(kp.public_key_base64(), restored.public_key_base64());
 
         let message = b"roundtrip test";
         let sig = kp.sign(message);
-        assert!(verify_signature(&restored.public_key_bytes(), message, &sig));
+        assert!(verify_signature(
+            &restored.public_key_bytes(),
+            message,
+            &sig
+        ));
     }
 
     #[test]

@@ -5,14 +5,17 @@ use serde::Deserialize;
 
 use maelstrom_core::error::MatrixError;
 
-use crate::auth::AdminUser;
 use crate::AdminState;
+use crate::auth::AdminUser;
 
 pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/_maelstrom/admin/v1/rooms", get(list_rooms))
         .route("/_maelstrom/admin/v1/rooms/{roomId}", get(get_room))
-        .route("/_maelstrom/admin/v1/rooms/{roomId}/shutdown", post(shutdown_room))
+        .route(
+            "/_maelstrom/admin/v1/rooms/{roomId}/shutdown",
+            post(shutdown_room),
+        )
 }
 
 #[derive(Deserialize)]
@@ -115,7 +118,12 @@ async fn shutdown_room(
 
     let mut kicked = 0;
     for member in &members {
-        if state.storage().set_membership(member, &room_id, "leave").await.is_ok() {
+        if state
+            .storage()
+            .set_membership(member, &room_id, "leave")
+            .await
+            .is_ok()
+        {
             kicked += 1;
         }
     }

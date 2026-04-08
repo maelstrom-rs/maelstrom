@@ -36,7 +36,9 @@ pub fn build(state: AppState) -> Router {
 
     Router::new()
         .merge(client_api)
-        .layer(axum::middleware::from_fn(crate::middleware::rate_limit::rate_limit_auth))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::rate_limit::rate_limit_auth,
+        ))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

@@ -8,12 +8,8 @@ async fn test_create_room_default() {
     let (token, _, _) = common::register_user(&router, "roomcreator", "pass").await;
 
     let body = serde_json::json!({});
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/createRoom",
-        &body,
-        &token,
-    ).await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     assert_eq!(status, StatusCode::OK, "createRoom failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -32,12 +28,8 @@ async fn test_create_room_with_name_and_topic() {
         "topic": "A room for testing",
         "preset": "public_chat",
     });
-    let (status, resp) = common::post_json_authed(
-        &router,
-        "/_matrix/client/v3/createRoom",
-        &body,
-        &token,
-    ).await;
+    let (status, resp) =
+        common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     assert_eq!(status, StatusCode::OK, "createRoom failed: {resp}");
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -48,7 +40,8 @@ async fn test_create_room_with_name_and_topic() {
         &router,
         &format!("/_matrix/client/v3/rooms/{room_id}/state/m.room.name"),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "get name state failed: {resp}");
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
     assert_eq!(json["name"], "Test Room");
@@ -58,11 +51,7 @@ async fn test_create_room_with_name_and_topic() {
 async fn test_create_room_unauthenticated() {
     let router = common::test_router();
     let body = serde_json::json!({});
-    let (status, _) = common::post_json(
-        &router,
-        "/_matrix/client/v3/createRoom",
-        &body,
-    ).await;
+    let (status, _) = common::post_json(&router, "/_matrix/client/v3/createRoom", &body).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -76,11 +65,8 @@ async fn test_joined_rooms() {
     common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
     common::post_json_authed(&router, "/_matrix/client/v3/createRoom", &body, &token).await;
 
-    let (status, resp) = common::get_authed(
-        &router,
-        "/_matrix/client/v3/joined_rooms",
-        &token,
-    ).await;
+    let (status, resp) =
+        common::get_authed(&router, "/_matrix/client/v3/joined_rooms", &token).await;
     assert_eq!(status, StatusCode::OK);
 
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -99,9 +85,12 @@ async fn test_leave_room() {
         "/_matrix/client/v3/createRoom",
         &serde_json::json!({}),
         &token,
-    ).await;
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Leave
     let (status, _) = common::post_json_authed(
@@ -109,7 +98,8 @@ async fn test_leave_room() {
         &format!("/_matrix/client/v3/rooms/{room_id}/leave"),
         &serde_json::json!({}),
         &token,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Should not be in joined_rooms anymore
@@ -131,9 +121,12 @@ async fn test_invite_and_join() {
         "/_matrix/client/v3/createRoom",
         &serde_json::json!({"preset": "private_chat"}),
         &token_alice,
-    ).await;
+    )
+    .await;
     let room_id = serde_json::from_str::<serde_json::Value>(&resp).unwrap()["room_id"]
-        .as_str().unwrap().to_string();
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Alice invites Bob
     let (status, resp) = common::post_json_authed(
@@ -141,7 +134,8 @@ async fn test_invite_and_join() {
         &format!("/_matrix/client/v3/rooms/{room_id}/invite"),
         &serde_json::json!({"user_id": "@bob2:localhost"}),
         &token_alice,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "invite failed: {resp}");
 
     // Bob joins
@@ -150,11 +144,13 @@ async fn test_invite_and_join() {
         &format!("/_matrix/client/v3/rooms/{room_id}/join"),
         &serde_json::json!({}),
         &token_bob,
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "join failed: {resp}");
 
     // Bob should see the room in joined_rooms
-    let (_, resp) = common::get_authed(&router, "/_matrix/client/v3/joined_rooms", &token_bob).await;
+    let (_, resp) =
+        common::get_authed(&router, "/_matrix/client/v3/joined_rooms", &token_bob).await;
     let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
     let rooms = json["joined_rooms"].as_array().unwrap();
     assert!(rooms.iter().any(|r| r.as_str() == Some(&room_id)));

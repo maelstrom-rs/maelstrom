@@ -114,39 +114,54 @@ async fn sync(
         } else {
             // Filter ID — look up from account data
             let filter_key = format!("_maelstrom.filter.{filter_str}");
-            storage.get_account_data(&user_id, None, &filter_key).await.ok()
+            storage
+                .get_account_data(&user_id, None, &filter_key)
+                .await
+                .ok()
         }
     } else {
         None
     };
 
     // Extract filter settings
-    let include_leave = sync_filter.as_ref()
+    let include_leave = sync_filter
+        .as_ref()
         .and_then(|f| f.get("room"))
         .and_then(|r| r.get("include_leave"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let timeline_limit = sync_filter.as_ref()
+    let timeline_limit = sync_filter
+        .as_ref()
         .and_then(|f| f.get("room"))
         .and_then(|r| r.get("timeline"))
         .and_then(|t| t.get("limit"))
         .and_then(|l| l.as_u64())
         .map(|l| l as usize);
 
-    let timeline_types: Option<Vec<String>> = sync_filter.as_ref()
+    let timeline_types: Option<Vec<String>> = sync_filter
+        .as_ref()
         .and_then(|f| f.get("room"))
         .and_then(|r| r.get("timeline"))
         .and_then(|t| t.get("types"))
         .and_then(|t| t.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        });
 
-    let state_types: Option<Vec<String>> = sync_filter.as_ref()
+    let state_types: Option<Vec<String>> = sync_filter
+        .as_ref()
         .and_then(|f| f.get("room"))
         .and_then(|r| r.get("state"))
         .and_then(|t| t.get("types"))
         .and_then(|t| t.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        });
 
     // Get user's rooms by membership state
     let joined_rooms = storage
@@ -159,10 +174,7 @@ async fn sync(
         .await
         .unwrap_or_default();
 
-    let left_rooms = storage
-        .get_left_rooms(&user_id)
-        .await
-        .unwrap_or_default();
+    let left_rooms = storage.get_left_rooms(&user_id).await.unwrap_or_default();
 
     // Get current stream position
     let current_position = storage
@@ -193,7 +205,8 @@ async fn sync(
     }
 
     // Check ephemeral events (typing, receipts) before deciding to long-poll
-    let join_map = add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms).await?;
+    let join_map =
+        add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms).await?;
 
     // Check if there are any new events (including ephemeral)
     let has_events = !join_map.is_empty() || !to_device_events.is_empty();
@@ -216,7 +229,14 @@ async fn sync(
             .await
             .map_err(crate::extractors::storage_error)?;
 
-        let join_map = build_incremental_sync_with_ephemeral(storage, state.ephemeral(), &joined_rooms, since, &user_id).await?;
+        let join_map = build_incremental_sync_with_ephemeral(
+            storage,
+            state.ephemeral(),
+            &joined_rooms,
+            since,
+            &user_id,
+        )
+        .await?;
 
         let to_device_events = storage
             .get_to_device_messages(&user_id, &device_id, since)
@@ -224,7 +244,10 @@ async fn sync(
             .unwrap_or_default();
 
         // Re-query invited/left rooms after wake-up
-        let invited_rooms = storage.get_invited_rooms(&user_id).await.unwrap_or_default();
+        let invited_rooms = storage
+            .get_invited_rooms(&user_id)
+            .await
+            .unwrap_or_default();
         let mut invite_map: HashMap<String, serde_json::Value> = HashMap::new();
         for room_id in &invited_rooms {
             let state = storage.get_current_state(room_id).await.unwrap_or_default();
@@ -234,11 +257,15 @@ async fn sync(
                     e.event_type == "m.room.create"
                         || e.event_type == "m.room.join_rules"
                         || e.event_type == "m.room.name"
-                        || (e.event_type == "m.room.member" && e.state_key.as_deref() == Some(&user_id))
+                        || (e.event_type == "m.room.member"
+                            && e.state_key.as_deref() == Some(&user_id))
                 })
                 .map(|e| e.to_client_event())
                 .collect();
-            invite_map.insert(room_id.clone(), serde_json::json!({ "invite_state": { "events": invite_state } }));
+            invite_map.insert(
+                room_id.clone(),
+                serde_json::json!({ "invite_state": { "events": invite_state } }),
+            );
         }
 
         // Re-query left rooms after wake-up
@@ -247,8 +274,12 @@ async fn sync(
         if include_leave || sync_filter.is_none() {
             for room_id in &left_rooms {
                 // Get leave position
-                let leave_pos = storage.get_state_event(room_id, "m.room.member", &user_id)
-                    .await.ok().map(|e| e.stream_position).unwrap_or(new_position);
+                let leave_pos = storage
+                    .get_state_event(room_id, "m.room.member", &user_id)
+                    .await
+                    .ok()
+                    .map(|e| e.stream_position)
+                    .unwrap_or(new_position);
 
                 // Get events between since and leave_pos
                 let mut timeline_events = Vec::new();
@@ -256,9 +287,10 @@ async fn sync(
                     for event in events {
                         if event.stream_position <= leave_pos {
                             if let Some(ref types) = timeline_types
-                                && !types.contains(&event.event_type) {
-                                    continue;
-                                }
+                                && !types.contains(&event.event_type)
+                            {
+                                continue;
+                            }
                             timeline_events.push(event.to_client_event());
                         }
                     }
@@ -320,7 +352,12 @@ async fn sync(
                 .get_state_event(room_id, "m.room.history_visibility", "")
                 .await
                 .ok()
-                .and_then(|e| e.content.get("history_visibility").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .and_then(|e| {
+                    e.content
+                        .get("history_visibility")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_else(|| "shared".to_string());
 
             let can_see_history = history_vis == "world_readable" || history_vis == "shared";
@@ -342,14 +379,18 @@ async fn sync(
             if can_see_history && effective_timeline_limit > 0 {
                 if is_initial {
                     // Fetch events backward from the leave position
-                    if let Ok(events) = storage.get_room_events(room_id, leave_pos + 1, effective_timeline_limit + 10, "b").await {
+                    if let Ok(events) = storage
+                        .get_room_events(room_id, leave_pos + 1, effective_timeline_limit + 10, "b")
+                        .await
+                    {
                         for event in events {
                             if event.stream_position <= leave_pos {
                                 // Apply timeline type filter if specified
                                 if let Some(ref types) = timeline_types
-                                    && !types.contains(&event.event_type) {
-                                        continue;
-                                    }
+                                    && !types.contains(&event.event_type)
+                                {
+                                    continue;
+                                }
                                 timeline_events.push(event.to_client_event());
                                 if timeline_events.len() >= effective_timeline_limit {
                                     break;
@@ -359,7 +400,10 @@ async fn sync(
                     }
                 } else {
                     // For incremental sync, include the leave membership event
-                    if let Ok(member_event) = storage.get_state_event(room_id, "m.room.member", &user_id).await {
+                    if let Ok(member_event) = storage
+                        .get_state_event(room_id, "m.room.member", &user_id)
+                        .await
+                    {
                         timeline_events.push(member_event.to_client_event());
                     }
                 }
@@ -371,18 +415,28 @@ async fn sync(
             // If timeline_limit is 0, put relevant events in state section instead
             if effective_timeline_limit == 0 {
                 // Include user's leave event and relevant state in state section
-                if let Ok(member_event) = storage.get_state_event(room_id, "m.room.member", &user_id).await {
+                if let Ok(member_event) = storage
+                    .get_state_event(room_id, "m.room.member", &user_id)
+                    .await
+                {
                     state_events.push(member_event.to_client_event());
                 }
                 // Include state events from before the user left
-                if let Ok(events) = storage.get_room_events(room_id, leave_pos + 1, 50, "b").await {
+                if let Ok(events) = storage
+                    .get_room_events(room_id, leave_pos + 1, 50, "b")
+                    .await
+                {
                     for event in events {
-                        if event.stream_position <= leave_pos && event.is_state() && event.event_type != "m.room.member" {
+                        if event.stream_position <= leave_pos
+                            && event.is_state()
+                            && event.event_type != "m.room.member"
+                        {
                             // Apply state type filter if specified
                             if let Some(ref types) = state_types
-                                && !types.contains(&event.event_type) {
-                                    continue;
-                                }
+                                && !types.contains(&event.event_type)
+                            {
+                                continue;
+                            }
                             state_events.push(event.to_client_event());
                         }
                     }
@@ -448,10 +502,14 @@ async fn build_initial_sync(
             .map(|e| e.stream_position.to_string())
             .unwrap_or_else(|| "0".to_string());
 
-        let state_client: Vec<serde_json::Value> =
-            state_events.into_iter().map(|e| e.to_client_event()).collect();
-        let timeline_client: Vec<serde_json::Value> =
-            timeline_events.into_iter().map(|e| e.to_client_event()).collect();
+        let state_client: Vec<serde_json::Value> = state_events
+            .into_iter()
+            .map(|e| e.to_client_event())
+            .collect();
+        let timeline_client: Vec<serde_json::Value> = timeline_events
+            .into_iter()
+            .map(|e| e.to_client_event())
+            .collect();
 
         join_map.insert(
             room_id.clone(),
@@ -554,7 +612,9 @@ async fn build_incremental_sync(
         join_map.insert(
             room_id.clone(),
             JoinedRoomResponse {
-                state: StateResponse { events: state_events },
+                state: StateResponse {
+                    events: state_events,
+                },
                 timeline: TimelineResponse {
                     events: timeline_events,
                     prev_batch: since.to_string(),
@@ -606,24 +666,29 @@ async fn compute_device_lists(
 
     // Check each user's device change position — only include if changed after `since`
     for user_id in &room_users {
-        if let Ok(data) = storage.get_account_data(user_id, None, "_maelstrom.device_change_pos").await
+        if let Ok(data) = storage
+            .get_account_data(user_id, None, "_maelstrom.device_change_pos")
+            .await
             && let Some(pos) = data.get("pos").and_then(|p| p.as_i64())
-                && pos > since {
-                    changed.insert(user_id.clone());
-                }
+            && pos > since
+        {
+            changed.insert(user_id.clone());
+        }
     }
 
     // Also check new member join events since last sync
     if let Ok(new_events) = storage.get_events_since(since).await {
-        let joined_set: std::collections::HashSet<&str> = joined_rooms.iter().map(|s| s.as_str()).collect();
+        let joined_set: std::collections::HashSet<&str> =
+            joined_rooms.iter().map(|s| s.as_str()).collect();
         for event in &new_events {
             if event.event_type == "m.room.member"
                 && joined_set.contains(event.room_id.as_str())
                 && event.sender != my_user_id
                 && let Some(membership) = event.content.get("membership").and_then(|m| m.as_str())
-                    && membership == "join" {
-                        changed.insert(event.sender.clone());
-                    }
+                && membership == "join"
+            {
+                changed.insert(event.sender.clone());
+            }
         }
     }
 
@@ -656,13 +721,10 @@ async fn add_ephemeral_events(
         }));
 
         // Read receipts
-        let receipts = storage
-            .get_receipts(room_id)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(room_id = %room_id, error = %e, "Failed to fetch receipts");
-                vec![]
-            });
+        let receipts = storage.get_receipts(room_id).await.unwrap_or_else(|e| {
+            tracing::warn!(room_id = %room_id, error = %e, "Failed to fetch receipts");
+            vec![]
+        });
 
         if !receipts.is_empty() {
             let mut content: HashMap<String, HashMap<String, HashMap<String, serde_json::Value>>> =
@@ -688,21 +750,22 @@ async fn add_ephemeral_events(
 
         if !ephemeral_events.is_empty() {
             // Get or create room entry
-            let room_response = join_map.entry(room_id.clone()).or_insert_with(|| {
-                JoinedRoomResponse {
-                    state: StateResponse { events: vec![] },
-                    timeline: TimelineResponse {
-                        events: vec![],
-                        prev_batch: "0".to_string(),
-                        limited: false,
-                    },
-                    ephemeral: EphemeralResponse { events: vec![] },
-                    unread_notifications: UnreadNotifications {
-                        highlight_count: 0,
-                        notification_count: 0,
-                    },
-                }
-            });
+            let room_response =
+                join_map
+                    .entry(room_id.clone())
+                    .or_insert_with(|| JoinedRoomResponse {
+                        state: StateResponse { events: vec![] },
+                        timeline: TimelineResponse {
+                            events: vec![],
+                            prev_batch: "0".to_string(),
+                            limited: false,
+                        },
+                        ephemeral: EphemeralResponse { events: vec![] },
+                        unread_notifications: UnreadNotifications {
+                            highlight_count: 0,
+                            notification_count: 0,
+                        },
+                    });
             room_response.ephemeral.events = ephemeral_events;
         }
     }
@@ -947,13 +1010,8 @@ async fn sliding_sync(
 
     for (room_id, params) in &rooms_to_fetch {
         // Fetch required state
-        let required_state = fetch_required_state(
-            storage,
-            room_id,
-            &params.required_state,
-            &user_id,
-        )
-        .await?;
+        let required_state =
+            fetch_required_state(storage, room_id, &params.required_state, &user_id).await?;
 
         // Extract room name from state events
         let name = required_state.iter().find_map(|ev| {
@@ -1007,7 +1065,16 @@ async fn sliding_sync(
     }
 
     // -- Extensions --
-    let extensions = build_extensions(storage, state.ephemeral(), &body.extensions, &joined_rooms, current_position, &user_id, auth.device_id.as_ref()).await?;
+    let extensions = build_extensions(
+        storage,
+        state.ephemeral(),
+        &body.extensions,
+        &joined_rooms,
+        current_position,
+        &user_id,
+        auth.device_id.as_ref(),
+    )
+    .await?;
 
     Ok(Json(SlidingSyncResponse {
         pos: current_position.to_string(),
@@ -1064,7 +1131,10 @@ async fn fetch_required_state(
             continue;
         }
 
-        match storage.get_state_event(room_id, event_type, &actual_key).await {
+        match storage
+            .get_state_event(room_id, event_type, &actual_key)
+            .await
+        {
             Ok(event) => {
                 result.push(event.to_client_event());
                 fetched.insert(dedup_key);

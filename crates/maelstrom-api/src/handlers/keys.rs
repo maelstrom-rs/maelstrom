@@ -4,7 +4,7 @@ use axum::{Json, Router};
 
 use maelstrom_core::error::MatrixError;
 
-use crate::extractors::{storage_error, AuthenticatedUser};
+use crate::extractors::{AuthenticatedUser, storage_error};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -39,18 +39,20 @@ async fn keys_upload(
     if let Some(device_keys) = body.get("device_keys") {
         // Validate: user_id in the key must match the authenticated user
         if let Some(key_user_id) = device_keys.get("user_id").and_then(|v| v.as_str())
-            && key_user_id != user_id {
-                return Err(MatrixError::bad_json(
-                    "device_keys user_id does not match the authenticated user",
-                ));
-            }
+            && key_user_id != user_id
+        {
+            return Err(MatrixError::bad_json(
+                "device_keys user_id does not match the authenticated user",
+            ));
+        }
         // Validate: device_id in the key must match the authenticated device
         if let Some(key_device_id) = device_keys.get("device_id").and_then(|v| v.as_str())
-            && key_device_id != device_id {
-                return Err(MatrixError::bad_json(
-                    "device_keys device_id does not match the authenticated device",
-                ));
-            }
+            && key_device_id != device_id
+        {
+            return Err(MatrixError::bad_json(
+                "device_keys device_id does not match the authenticated device",
+            ));
+        }
 
         storage
             .set_device_keys(&user_id, &device_id, device_keys)
@@ -59,12 +61,14 @@ async fn keys_upload(
 
         // Record device list change for sync tracking
         let change_pos = storage.current_stream_position().await.unwrap_or(0);
-        let _ = storage.set_account_data(
-            &user_id,
-            None,
-            "_maelstrom.device_change_pos",
-            &serde_json::json!({"pos": change_pos}),
-        ).await;
+        let _ = storage
+            .set_account_data(
+                &user_id,
+                None,
+                "_maelstrom.device_change_pos",
+                &serde_json::json!({"pos": change_pos}),
+            )
+            .await;
     }
 
     // Store one-time keys if provided
@@ -98,15 +102,16 @@ async fn keys_query(
 
     // Validate: device_keys values must be arrays (lists of device IDs), not objects
     if let Some(device_keys) = body.get("device_keys")
-        && let Some(obj) = device_keys.as_object() {
-            for (uid, val) in obj {
-                if !val.is_array() {
-                    return Err(MatrixError::bad_json(
-                        format!("device_keys value for '{uid}' must be an array of device IDs"),
-                    ));
-                }
+        && let Some(obj) = device_keys.as_object()
+    {
+        for (uid, val) in obj {
+            if !val.is_array() {
+                return Err(MatrixError::bad_json(format!(
+                    "device_keys value for '{uid}' must be an array of device IDs"
+                )));
             }
         }
+    }
 
     // Extract user IDs from the request
     let user_ids: Vec<String> = body
@@ -226,11 +231,14 @@ async fn keys_changes(
             for member in members {
                 if member != user_id && seen.insert(member.clone()) {
                     // Check if this user has a device change after `from`
-                    if let Ok(data) = storage.get_account_data(&member, None, "_maelstrom.device_change_pos").await
+                    if let Ok(data) = storage
+                        .get_account_data(&member, None, "_maelstrom.device_change_pos")
+                        .await
                         && let Some(pos) = data.get("pos").and_then(|p| p.as_i64())
-                            && pos > from {
-                                changed.push(member);
-                            }
+                        && pos > from
+                    {
+                        changed.push(member);
+                    }
                 }
             }
         }
@@ -264,8 +272,6 @@ async fn keys_device_signing_upload(
 /// POST /_matrix/client/v3/keys/signatures/upload
 ///
 /// Upload key signatures (stub -- accepts and returns success).
-async fn keys_signatures_upload(
-    _auth: AuthenticatedUser,
-) -> Json<serde_json::Value> {
+async fn keys_signatures_upload(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "failures": {} }))
 }

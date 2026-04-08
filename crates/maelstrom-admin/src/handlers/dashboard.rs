@@ -1,14 +1,14 @@
 use askama::Template;
+use axum::Router;
 use axum::extract::State;
 use axum::response::Html;
 use axum::routing::get;
-use axum::Router;
 
 use maelstrom_core::error::MatrixError;
 
+use crate::AdminState;
 use crate::auth::AdminUser;
 use crate::templates;
-use crate::AdminState;
 
 pub fn routes() -> Router<AdminState> {
     Router::new()

@@ -216,15 +216,27 @@ async fn change_password(
         // Remove pushers created by other sessions (keep current token's pushers)
         let user_id = auth.user_id.to_string();
         let current_token = auth.access_token.clone();
-        if let Ok(pushers_data) = state.storage().get_account_data(&user_id, None, "_maelstrom.pushers").await
-            && let Some(pushers) = pushers_data.get("items").and_then(|i| i.as_array()) {
-                let kept: Vec<serde_json::Value> = pushers
-                    .iter()
-                    .filter(|p| p.get("_access_token").and_then(|t| t.as_str()) == Some(&current_token))
-                    .cloned()
-                    .collect();
-                let _ = state.storage().set_account_data(&user_id, None, "_maelstrom.pushers", &serde_json::json!({"items": kept})).await;
-            }
+        if let Ok(pushers_data) = state
+            .storage()
+            .get_account_data(&user_id, None, "_maelstrom.pushers")
+            .await
+            && let Some(pushers) = pushers_data.get("items").and_then(|i| i.as_array())
+        {
+            let kept: Vec<serde_json::Value> = pushers
+                .iter()
+                .filter(|p| p.get("_access_token").and_then(|t| t.as_str()) == Some(&current_token))
+                .cloned()
+                .collect();
+            let _ = state
+                .storage()
+                .set_account_data(
+                    &user_id,
+                    None,
+                    "_maelstrom.pushers",
+                    &serde_json::json!({"items": kept}),
+                )
+                .await;
+        }
     }
 
     Ok((StatusCode::OK, Json(serde_json::json!({}))))

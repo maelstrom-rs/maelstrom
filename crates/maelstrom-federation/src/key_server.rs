@@ -11,10 +11,7 @@ pub fn routes() -> Router<FederationState> {
     Router::new()
         .route("/_matrix/key/v2/server", get(get_server_keys))
         .route("/_matrix/key/v2/server/{keyId}", get(get_server_keys))
-        .route(
-            "/_matrix/key/v2/query/{serverName}",
-            get(query_server_keys),
-        )
+        .route("/_matrix/key/v2/query/{serverName}", get(query_server_keys))
         .route("/_matrix/key/v2/query", post(query_server_keys_batch))
 }
 
@@ -75,8 +72,8 @@ async fn query_server_keys(
             .get("valid_until_ts")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let valid_until_dt = chrono::DateTime::from_timestamp_millis(valid_until)
-            .unwrap_or_else(chrono::Utc::now);
+        let valid_until_dt =
+            chrono::DateTime::from_timestamp_millis(valid_until).unwrap_or_else(chrono::Utc::now);
 
         for (key_id, key_data) in verify_keys {
             if let Some(pub_key) = key_data.get("key").and_then(|k| k.as_str()) {
