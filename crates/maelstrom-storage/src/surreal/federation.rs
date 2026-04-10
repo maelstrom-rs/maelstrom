@@ -1,3 +1,15 @@
+//! Federation-related storage -- [`FederationKeyStore`](crate::traits::FederationKeyStore) implementation.
+//!
+//! Manages three concerns:
+//!
+//! 1. **Server signing keys** (`server_key` table) -- this server's own
+//!    ed25519 key pairs used to sign outgoing federation requests and events.
+//! 2. **Remote server keys** (`remote_key` table) -- cached public keys
+//!    fetched from other homeservers, used to verify incoming signatures.
+//! 3. **Transaction deduplication** (`federation_txn` table) -- tracks
+//!    `(origin, txn_id)` pairs so that replayed federation transactions are
+//!    rejected.
+
 use async_trait::async_trait;
 use surrealdb::types::{Datetime, SurrealValue};
 use tracing::debug;

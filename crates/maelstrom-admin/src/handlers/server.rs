@@ -1,8 +1,24 @@
+//! Server status, health, and metrics endpoints.
+//!
+//! Exposes operational information about the running Maelstrom instance. All
+//! endpoints require admin authentication.
+//!
+//! ## Routes
+//!
+//! | Method | Path                                    | Operation                          |
+//! |--------|-----------------------------------------|------------------------------------|
+//! | `GET`  | `/_maelstrom/admin/v1/server/info`      | Server name, version, uptime, system stats |
+//! | `GET`  | `/_maelstrom/admin/v1/server/health`    | Detailed health (DB, memory, CPU)  |
+//! | `GET`  | `/_maelstrom/admin/v1/metrics`          | Prometheus-format metrics export    |
+//!
+//! System metrics (memory, CPU count) are gathered via the `sysinfo` crate.
+//! Database health is checked with a lightweight `is_healthy()` probe.
+
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 use sysinfo::System;
 
 use crate::AdminState;

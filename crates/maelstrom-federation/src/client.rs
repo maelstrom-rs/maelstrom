@@ -1,33 +1,101 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
+//! # Outbound Federation HTTP Client
+//!
+//! This module provides [`FederationClient`], the HTTP client used for all outbound
+//! federation requests -- any time this server needs to talk to another Matrix server.
+//!
+//! ## Server Discovery
+//!
+//! Before sending a request, the client must figure out where the destination server
+//! actually lives. Matrix defines a multi-step discovery process:
+//!
+//! 1. **Explicit port** -- if the server name already contains a port (e.g.,
+//!    `matrix.example.com:443`), use it directly.
+//! 2. **`.well-known`** -- try `GET https://{server_name}/.well-known/matrix/server`.
+//!    If it returns `{"m.server": "delegated.example.com:8448"}`, use that.
+//! 3. **SRV DNS lookup** -- query `_matrix-fed._tcp.{server_name}` for an SRV record
+//!    that points to the actual host and port.
+//! 4. **Port 8448 fallback** -- if nothing else works, try `https://{server_name}:8448`.
+//!
+//! Resolved endpoints are cached in a [`DashMap`] so discovery only happens once per
+//! destination (until the process restarts).
+//!
+//! ## Request Signing
+//!
+//! Every outbound federation request is signed using the **X-Matrix** authorization
+//! scheme. The client uses [`sign_request`](crate::signing::sign_request) to produce
+//! an `Authorization` header that includes the origin server name, destination, key ID,
+//! and a signature over the canonical JSON representation of the request.
+//!
+//! ## Error Handling
+//!
+//! Federation requests can fail in three ways, represented by [`FederationError`]:
+//!
+//! - **`Request`** -- network-level failure (DNS, TLS, timeout)
+//! - **`Remote`** -- the remote server returned an HTTP error (4xx, 5xx)
+//! - **`InvalidResponse`** -- the response body was not valid JSON
 
-use maelstrom_core::identifiers::ServerName;
-use maelstrom_core::signatures::keys::KeyPair;
+use dashmap::DashMap;
+use maelstrom_core::matrix::id::ServerName;
+use maelstrom_core::matrix::keys::KeyPair;
 use tracing::debug;
 
 /// Outbound federation HTTP client with server discovery and request signing.
+///
+/// Wraps a [`reqwest::Client`] with Matrix-specific functionality: automatic server
+/// discovery (`.well-known` / SRV / port 8448 fallback), endpoint caching via
+/// [`DashMap`], and X-Matrix request signing on every outbound request.
+///
+/// # TLS Configuration
+///
+/// In production, a custom CA certificate can be provided for TLS verification.
+/// When no CA path is given, the client falls back to accepting all certificates
+/// (development mode only).
 pub struct FederationClient {
     http: reqwest::Client,
     signing_key: KeyPair,
     server_name: ServerName,
     /// Cache of server_name -> resolved endpoint URL.
-    endpoints: Mutex<HashMap<String, String>>,
+    endpoints: DashMap<String, String>,
 }
 
 impl FederationClient {
     pub fn new(signing_key: KeyPair, server_name: ServerName) -> Self {
-        let http = reqwest::Client::builder()
+        Self::with_ca(signing_key, server_name, None)
+    }
+
+    /// Create a federation client, optionally trusting a specific CA certificate.
+    /// When `ca_path` is provided, the client trusts that CA for TLS verification.
+    /// When absent, falls back to accepting all certificates (dev mode).
+    pub fn with_ca(signing_key: KeyPair, server_name: ServerName, ca_path: Option<&str>) -> Self {
+        let mut builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent("Maelstrom Matrix Homeserver")
-            .build()
-            .expect("Failed to build HTTP client");
+            .user_agent("Maelstrom Matrix Homeserver");
+
+        if let Some(path) = ca_path {
+            if let Ok(pem) = std::fs::read(path) {
+                if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
+                    debug!(path = %path, "Loaded custom CA certificate for federation");
+                    builder = builder.add_root_certificate(cert);
+                } else {
+                    tracing::warn!(path = %path, "Failed to parse CA certificate, falling back to insecure");
+                    builder = builder.danger_accept_invalid_certs(true);
+                }
+            } else {
+                tracing::warn!(path = %path, "Failed to read CA certificate, falling back to insecure");
+                builder = builder.danger_accept_invalid_certs(true);
+            }
+        } else {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        let http = builder.build().expect("Failed to build HTTP client");
 
         Self {
             http,
             signing_key,
             server_name,
-            endpoints: Mutex::new(HashMap::new()),
+            endpoints: DashMap::new(),
         }
     }
 
@@ -36,18 +104,15 @@ impl FederationClient {
     /// Tries `.well-known/matrix/server` first, falls back to `server_name:8448`.
     pub async fn discover(&self, server_name: &str) -> String {
         // Check cache
-        {
-            let cache = self.endpoints.lock().unwrap();
-            if let Some(url) = cache.get(server_name) {
-                return url.clone();
-            }
+        if let Some(url) = self.endpoints.get(server_name) {
+            return url.clone();
         }
 
         let endpoint = self.do_discover(server_name).await;
 
         // Cache
-        let mut cache = self.endpoints.lock().unwrap();
-        cache.insert(server_name.to_string(), endpoint.clone());
+        self.endpoints
+            .insert(server_name.to_string(), endpoint.clone());
         endpoint
     }
 
@@ -118,6 +183,10 @@ impl FederationClient {
     }
 
     /// Send a signed GET request to a remote server.
+    ///
+    /// Performs server discovery, signs the request with the X-Matrix scheme,
+    /// and returns the parsed JSON response. Returns a [`FederationError`] if
+    /// discovery fails, the remote returns an error, or the response is not valid JSON.
     pub async fn get(
         &self,
         destination: &str,
@@ -160,6 +229,10 @@ impl FederationClient {
     }
 
     /// Send a signed PUT request with a JSON body to a remote server.
+    ///
+    /// Used for sending federation transactions (`/send/{txnId}`), join events
+    /// (`/send_join`), and other write operations. The body is included in the
+    /// X-Matrix signature computation.
     pub async fn put_json(
         &self,
         destination: &str,
@@ -207,7 +280,11 @@ impl FederationClient {
         serde_json::from_str(&text).map_err(|e| FederationError::InvalidResponse(e.to_string()))
     }
 
-    /// Fetch a remote server's signing keys.
+    /// Fetch a remote server's signing keys from `/_matrix/key/v2/server`.
+    ///
+    /// Every Matrix homeserver publishes its Ed25519 signing keys at this well-known
+    /// endpoint. The returned JSON includes `verify_keys`, `old_verify_keys`, and
+    /// `valid_until_ts`.
     pub async fn fetch_server_keys(
         &self,
         server_name: &str,
@@ -216,14 +293,21 @@ impl FederationClient {
     }
 }
 
+/// Errors that can occur during outbound federation requests.
+///
+/// These cover the three failure modes of talking to a remote server:
+/// network issues, remote HTTP errors, and unparseable responses.
 #[derive(Debug, thiserror::Error)]
 pub enum FederationError {
+    /// Network-level failure: DNS resolution, TLS handshake, connection timeout, etc.
     #[error("Request failed: {0}")]
     Request(String),
 
+    /// The remote server returned an HTTP error status (4xx or 5xx).
     #[error("Remote error: {0}")]
     Remote(String),
 
+    /// The response body could not be parsed as valid JSON.
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 }

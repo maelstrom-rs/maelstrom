@@ -1,7 +1,7 @@
 mod common;
 
 use http::StatusCode;
-use maelstrom_core::signatures::{self, keys::KeyPair};
+use maelstrom_core::matrix::{keys::KeyPair, signing};
 
 // -- Canonical JSON tests --
 
@@ -14,7 +14,7 @@ fn test_canonical_json_spec_compliance() {
         "two": "Two"
     });
 
-    let canonical = signatures::canonical_json(&val);
+    let canonical = signing::canonical_json(&val);
 
     // Keys must be sorted at all levels
     assert!(canonical.starts_with(r#"{"auth":{""#));
@@ -40,7 +40,7 @@ fn test_sign_event_roundtrip() {
         "depth": 1,
     });
 
-    let signed = signatures::sign_event(&event, &kp, "example.com");
+    let signed = signing::sign_event(&event, &kp, "example.com");
 
     // Must have signatures and hashes
     assert!(signed.get("signatures").is_some());
@@ -48,7 +48,7 @@ fn test_sign_event_roundtrip() {
     assert!(signed["hashes"]["sha256"].is_string());
 
     // Must verify
-    assert!(signatures::verify_event_signature(
+    assert!(signing::verify_event_signature(
         &signed,
         &kp.public_key_bytes(),
         "example.com",
@@ -64,8 +64,8 @@ fn test_reference_hash_deterministic() {
         "content": {"body": "deterministic"},
     });
 
-    let hash1 = signatures::reference_hash(&event);
-    let hash2 = signatures::reference_hash(&event);
+    let hash1 = signing::reference_hash(&event);
+    let hash2 = signing::reference_hash(&event);
 
     assert_eq!(hash1, hash2);
     assert!(hash1.starts_with('$'));
@@ -112,8 +112,8 @@ fn test_request_signing_roundtrip() {
 #[tokio::test]
 async fn test_key_server_endpoint() {
     use axum::body::Body;
-    use maelstrom_core::ephemeral::EphemeralStore;
-    use maelstrom_core::identifiers::ServerName;
+    use maelstrom_core::matrix::ephemeral::EphemeralStore;
+    use maelstrom_core::matrix::id::ServerName;
     use maelstrom_storage::mock::MockStorage;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -216,11 +216,11 @@ async fn test_mock_federation_key_store() {
     );
 }
 
-// -- StoredEvent federation fields test --
+// -- Pdu federation fields test --
 
 #[test]
-fn test_stored_event_federation_fields() {
-    let event = maelstrom_core::events::pdu::StoredEvent {
+fn test_pdu_federation_fields() {
+    let event = maelstrom_core::matrix::event::Pdu {
         event_id: "$test123".to_string(),
         room_id: "!room:example.com".to_string(),
         sender: "@alice:example.com".to_string(),
@@ -238,7 +238,7 @@ fn test_stored_event_federation_fields() {
         signatures: Some(serde_json::json!({"example.com": {"ed25519:key1": "sig"}})),
     };
 
-    let fed_event = event.to_federation_event();
+    let fed_event = event.to_federation_json();
     assert_eq!(fed_event["origin"], "example.com");
     assert_eq!(fed_event["auth_events"][0], "$auth1");
     assert_eq!(fed_event["prev_events"][0], "$prev1");
@@ -247,7 +247,7 @@ fn test_stored_event_federation_fields() {
     assert!(fed_event["signatures"]["example.com"]["ed25519:key1"].is_string());
 
     // Client event should NOT include federation fields
-    let client_event = event.to_client_event();
+    let client_event = event.to_client_event().into_json();
     assert!(client_event.get("origin").is_none());
     assert!(client_event.get("auth_events").is_none());
     assert!(client_event.get("signatures").is_none());

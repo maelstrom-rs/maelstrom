@@ -1,16 +1,57 @@
+//! Authentication handlers -- login, logout, and session management.
+//!
+//! Implements the following Matrix Client-Server API endpoints
+//! ([spec: 5.5 Login](https://spec.matrix.org/v1.13/client-server-api/#login)):
+//!
+//! | Method | Path | Handler |
+//! |--------|------|---------|
+//! | `GET`  | `/_matrix/client/v3/login` | Advertise supported login flows |
+//! | `POST` | `/_matrix/client/v3/login` | Authenticate and obtain an access token |
+//! | `POST` | `/_matrix/client/v3/logout` | Invalidate the current access token |
+//! | `POST` | `/_matrix/client/v3/logout/all` | Invalidate all tokens for the user |
+//!
+//! # Login flow (`m.login.password`)
+//!
+//! 1. Client calls `GET /login` to discover that `m.login.password` is available.
+//! 2. Client sends `POST /login` with an `m.id.user` identifier (or the legacy
+//!    `user` field) plus a plaintext `password`.
+//! 3. The server resolves the localpart (lowercased, as required by the spec),
+//!    verifies the password hash with Argon2, and -- on success -- creates a new
+//!    [`DeviceRecord`](maelstrom_storage::traits::DeviceRecord) and access token.
+//! 4. If the client supplies a `device_id`, the server reuses it (allowing
+//!    session resumption); otherwise a fresh device ID is generated.
+//!
+//! On successful login the server also records a device-list change position so
+//! that other users sharing rooms with this user will see the new device on their
+//! next `/sync`.
+//!
+//! # Logout
+//!
+//! - `POST /logout` removes only the device (and its access token) that made the
+//!   request.
+//! - `POST /logout/all` removes every device owned by the user, invalidating all
+//!   active sessions.
+
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 use maelstrom_storage::traits::{DeviceRecord, StorageError};
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::handlers::util;
 use crate::state::AppState;
 
+/// Register all authentication routes.
+///
+/// Routes:
+/// - `GET/POST /_matrix/client/v3/login` -- login flow discovery and credential exchange
+/// - `GET/POST /_matrix/client/r0/login` -- legacy r0 compatibility alias
+/// - `POST /_matrix/client/v3/logout` -- single-session logout
+/// - `POST /_matrix/client/v3/logout/all` -- all-session logout
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_matrix/client/v3/login", get(get_login).post(post_login))
@@ -21,6 +62,10 @@ pub fn routes() -> Router<AppState> {
 
 // -- GET /login --
 
+/// Response body for `GET /login`.
+///
+/// Returns the list of supported authentication flows. Currently only
+/// `m.login.password` is advertised.
 #[derive(Serialize)]
 struct LoginFlowsResponse {
     flows: Vec<LoginFlow>,
@@ -42,6 +87,13 @@ async fn get_login() -> Json<LoginFlowsResponse> {
 
 // -- POST /login --
 
+/// Request body for `POST /login`.
+///
+/// The client must set `type` to `"m.login.password"` and provide either a
+/// structured `identifier` (`{ "type": "m.id.user", "user": "alice" }`) or the
+/// legacy top-level `user` field. The `password` is transmitted in cleartext
+/// (the transport layer MUST use TLS). An optional `device_id` allows the
+/// client to resume an existing device session instead of creating a new one.
 #[derive(Deserialize)]
 struct LoginRequest {
     #[serde(rename = "type")]
@@ -61,6 +113,11 @@ struct UserIdentifier {
     user: Option<String>,
 }
 
+/// Successful login response.
+///
+/// Contains the fully-qualified `user_id`, a fresh `access_token`, the
+/// `device_id` (newly generated or reused from the request), and the
+/// `home_server` name for client reference.
 #[derive(Serialize)]
 struct LoginResponse {
     user_id: String,
@@ -118,7 +175,7 @@ async fn post_login(
     if user.is_deactivated {
         return Err(MatrixError::new(
             http::StatusCode::FORBIDDEN,
-            maelstrom_core::error::ErrorCode::UserDeactivated,
+            maelstrom_core::matrix::error::ErrorCode::UserDeactivated,
             "This account has been deactivated",
         ));
     }

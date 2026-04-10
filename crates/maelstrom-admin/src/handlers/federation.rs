@@ -1,8 +1,22 @@
+//! Federation status and diagnostics.
+//!
+//! Provides read-only federation health information. All endpoints require
+//! admin authentication.
+//!
+//! ## Routes
+//!
+//! | Method | Path                                        | Operation                        |
+//! |--------|---------------------------------------------|----------------------------------|
+//! | `GET`  | `/_maelstrom/admin/v1/federation/stats`     | Signing key count and status     |
+//!
+//! Returns the server name, number of active Ed25519 signing keys, and an
+//! overall federation status indicator.
+
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::AdminState;
 use crate::auth::AdminUser;

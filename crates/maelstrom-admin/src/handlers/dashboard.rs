@@ -1,10 +1,28 @@
+//! SSR admin dashboard pages.
+//!
+//! Serves the browser-based admin UI as server-side-rendered HTML using Askama
+//! templates. Every page requires a valid admin token (the [`AdminUser`]
+//! extractor runs before each handler).
+//!
+//! ## Routes
+//!
+//! | Path                            | Page                                    |
+//! |---------------------------------|-----------------------------------------|
+//! | `GET /_maelstrom/admin/`        | Overview: uptime, memory, DB health     |
+//! | `GET /_maelstrom/admin/users`   | User management table                   |
+//! | `GET /_maelstrom/admin/rooms`   | Room management table                   |
+//! | `GET /_maelstrom/admin/federation` | Federation status and signing keys   |
+//!
+//! The overview page gathers live system metrics via the `sysinfo` crate
+//! (memory usage) and the [`AdminState`] (uptime, DB health check).
+
 use askama::Template;
 use axum::Router;
 use axum::extract::State;
 use axum::response::Html;
 use axum::routing::get;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::AdminState;
 use crate::auth::AdminUser;

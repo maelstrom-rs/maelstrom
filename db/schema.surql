@@ -143,11 +143,12 @@ INSERT INTO stream_counter { id: stream_counter:global, position: 0 } ON DUPLICA
 -- =============================================================
 DEFINE TABLE IF NOT EXISTS txn_id SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS device_id  ON TABLE txn_id TYPE string;
+DEFINE FIELD IF NOT EXISTS room_id    ON TABLE txn_id TYPE string;
 DEFINE FIELD IF NOT EXISTS txn_id     ON TABLE txn_id TYPE string;
 DEFINE FIELD IF NOT EXISTS event_id   ON TABLE txn_id TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at ON TABLE txn_id TYPE datetime DEFAULT time::now();
 
-DEFINE INDEX IF NOT EXISTS idx_txn_id_unique ON TABLE txn_id FIELDS device_id, txn_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_txn_id_unique ON TABLE txn_id FIELDS device_id, room_id, txn_id UNIQUE;
 
 -- =============================================================
 -- GRAPH: Event DAG edges (prev_events, auth_events)
@@ -181,8 +182,10 @@ DEFINE FIELD IF NOT EXISTS rel_type    ON TABLE relates_to TYPE string;
 DEFINE FIELD IF NOT EXISTS room_id     ON TABLE relates_to TYPE string;
 DEFINE FIELD IF NOT EXISTS sender      ON TABLE relates_to TYPE string;
 DEFINE FIELD IF NOT EXISTS event_type  ON TABLE relates_to TYPE string;
-DEFINE FIELD IF NOT EXISTS content_key ON TABLE relates_to TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS created_at  ON TABLE relates_to TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS content_key     ON TABLE relates_to TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS child_event_id  ON TABLE relates_to TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS parent_event_id ON TABLE relates_to TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS created_at      ON TABLE relates_to TYPE datetime DEFAULT time::now();
 
 DEFINE INDEX IF NOT EXISTS idx_relates_to_room_type ON TABLE relates_to FIELDS room_id, rel_type;
 

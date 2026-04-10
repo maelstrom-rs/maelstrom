@@ -1,12 +1,45 @@
+//! Room directory -- aliases, visibility, and public room listing.
+//!
+//! The room directory lets users discover rooms by browsing or searching a
+//! public list. Three concepts come together here:
+//!
+//! * **Room aliases** -- human-readable names like `#general:example.com` that
+//!   resolve to an opaque room ID. A room can have many aliases; aliases can be
+//!   created, looked up, and deleted.
+//! * **Room visibility** -- controls whether a room appears in the server's
+//!   public room list. This is separate from join rules; a room can be publicly
+//!   listed but still require an invitation to join.
+//! * **Public room list** -- the browseable/searchable directory of rooms whose
+//!   visibility is set to `public`.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `PUT`    | `/_matrix/client/v3/directory/room/{roomAlias}` | Create a new room alias mapping |
+//! | `GET`    | `/_matrix/client/v3/directory/room/{roomAlias}` | Resolve an alias to a room ID and servers |
+//! | `DELETE` | `/_matrix/client/v3/directory/room/{roomAlias}` | Delete a room alias |
+//! | `GET`    | `/_matrix/client/v3/rooms/{roomId}/aliases` | List all aliases for a room |
+//! | `PUT`    | `/_matrix/client/v3/directory/list/room/{roomId}` | Set the visibility of a room in the directory |
+//! | `GET`    | `/_matrix/client/v3/publicRooms` | Get the public room list (simple) |
+//! | `POST`   | `/_matrix/client/v3/publicRooms` | Search/filter the public room list |
+//!
+//! # Matrix spec
+//!
+//! * [Room aliases](https://spec.matrix.org/v1.12/client-server-api/#room-aliases)
+//! * [Listing rooms](https://spec.matrix.org/v1.12/client-server-api/#listing-rooms)
+
 use axum::extract::{Path, State};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::room::{Membership, event_type as et};
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
+use crate::handlers::util::require_membership;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -59,7 +92,7 @@ async fn set_room_alias(
         .map_err(|e| match e {
             StorageError::Duplicate(_) => MatrixError::new(
                 http::StatusCode::CONFLICT,
-                maelstrom_core::error::ErrorCode::Unknown,
+                maelstrom_core::matrix::error::ErrorCode::Unknown,
                 "Alias already in use",
             ),
             other => crate::extractors::storage_error(other),
@@ -121,7 +154,7 @@ async fn delete_room_alias(
     if !is_creator {
         // Check power level — need state_default or higher
         let power_levels = storage
-            .get_state_event(&room_id, "m.room.power_levels", "")
+            .get_state_event(&room_id, et::POWER_LEVELS, "")
             .await
             .ok();
 
@@ -167,12 +200,9 @@ async fn get_room_aliases(
     let sender = auth.user_id.to_string();
 
     // Check user is a member of the room
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|_| MatrixError::forbidden("You are not in this room"))?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
-    if membership != "join" {
+    if membership != Membership::Join.as_str() {
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 

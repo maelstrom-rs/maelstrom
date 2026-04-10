@@ -1,3 +1,30 @@
+//! S3-compatible object storage client for media content.
+//!
+//! [`MediaClient`] wraps the AWS S3 SDK (`aws-sdk-s3`) to provide a simple
+//! async interface for media CRUD operations against any S3-compatible store
+//! (RustFS, MinIO, AWS S3, etc.).
+//!
+//! ## Connection
+//!
+//! [`MediaClient::connect`] builds an S3 client from a [`MediaConfig`]
+//! (endpoint URL, bucket name, credentials, region) with `force_path_style`
+//! enabled (required for non-AWS S3-compatible stores). On first connect it
+//! checks whether the configured bucket exists and creates it if missing.
+//!
+//! ## Operations
+//!
+//! - [`MediaClient::upload`]   -- `PutObject` with content-type metadata.
+//! - [`MediaClient::download`] -- `GetObject`, returning bytes + content-type + length.
+//! - [`MediaClient::delete`]   -- `DeleteObject` by key.
+//! - [`MediaClient::exists`]   -- `HeadObject` existence check.
+//! - [`MediaClient::is_healthy`] -- `HeadBucket` liveness probe.
+//!
+//! ## Error handling
+//!
+//! All fallible operations return [`MediaError`], which distinguishes connection
+//! failures, upload/download errors, and not-found conditions so that callers
+//! can map them to the appropriate Matrix error codes.
+
 use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::ByteStream;
 use bytes::Bytes;

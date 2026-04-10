@@ -122,6 +122,9 @@ async fn test_upload_cross_signing_keys() {
     let (token, user_id, _) = common::register_user(&router, "crosssign", "pass").await;
 
     let keys = serde_json::json!({
+        "auth": {
+            "type": "m.login.dummy",
+        },
         "master_key": {
             "user_id": user_id,
             "usage": ["master"],

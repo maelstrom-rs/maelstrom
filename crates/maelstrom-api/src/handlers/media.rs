@@ -1,3 +1,44 @@
+//! Media upload, download, thumbnails, and URL previews.
+//!
+//! Media in Matrix is referenced by **MXC URIs** of the form
+//! `mxc://server_name/media_id`. The upload flow works as follows:
+//!
+//! 1. The client `POST`s the file bytes to the upload endpoint.
+//! 2. The server stores the file (backed by RustFS/S3-compatible storage) and
+//!    returns an `mxc://` URI.
+//! 3. Other clients download or thumbnail the media by referencing that URI
+//!    through the download/thumbnail endpoints.
+//!
+//! **Thumbnails** are generated on the fly (or served from cache) based on the
+//! requested `width`, `height`, and `method` (`crop` or `scale`).
+//!
+//! **URL previews** allow clients to request an OpenGraph-style preview for an
+//! arbitrary HTTP(S) URL, which the server fetches and summarises.
+//!
+//! Both the authenticated `v1` (Matrix v1.11+) paths and the legacy `v3` media
+//! paths are supported for backwards compatibility.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `POST` | `/_matrix/client/v1/media/upload` | Upload media (authenticated, v1.11+) |
+//! | `GET`  | `/_matrix/client/v1/media/download/{serverName}/{mediaId}` | Download media |
+//! | `GET`  | `/_matrix/client/v1/media/download/{serverName}/{mediaId}/{fileName}` | Download media with a suggested filename |
+//! | `GET`  | `/_matrix/client/v1/media/thumbnail/{serverName}/{mediaId}` | Get a thumbnail of the media |
+//! | `GET`  | `/_matrix/client/v1/media/config` | Get server media config (max upload size) |
+//! | `GET`  | `/_matrix/client/v1/media/preview_url` | Get an OpenGraph preview for a URL |
+//! | `POST` | `/_matrix/media/v3/upload` | Upload media (legacy v3 path) |
+//! | `GET`  | `/_matrix/media/v3/download/{serverName}/{mediaId}` | Download media (legacy v3) |
+//! | `GET`  | `/_matrix/media/v3/download/{serverName}/{mediaId}/{fileName}` | Download with filename (legacy v3) |
+//! | `GET`  | `/_matrix/media/v3/thumbnail/{serverName}/{mediaId}` | Thumbnail (legacy v3) |
+//! | `GET`  | `/_matrix/media/v3/config` | Media config (legacy v3) |
+//! | `GET`  | `/_matrix/media/v3/preview_url` | URL preview (legacy v3) |
+//!
+//! # Matrix spec
+//!
+//! * [Content repository](https://spec.matrix.org/v1.12/client-server-api/#content-repository)
+
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
@@ -8,7 +49,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_storage::traits::MediaRecord;
 
 use crate::extractors::AuthenticatedUser;

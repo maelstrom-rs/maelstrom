@@ -1,9 +1,31 @@
+//! Server-side message search.
+//!
+//! Provides full-text search over room events. Clients submit a search term and
+//! optional filters (by room, sender, etc.) and the server returns matching
+//! events ranked by relevance using BM25 scoring.
+//!
+//! Search only covers rooms the requesting user is a member of. Results include
+//! the matched events along with optional context (events before/after the
+//! match) and highlight information so clients can render snippets.
+//!
+//! Pagination is supported via a `next_batch` token in the response.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `POST` | `/_matrix/client/v3/search` | Perform a server-side search across room events |
+//!
+//! # Matrix spec
+//!
+//! * [Search](https://spec.matrix.org/v1.12/client-server-api/#search)
+
 use axum::extract::{Query, State};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::state::AppState;
@@ -168,7 +190,7 @@ async fn search(
     for event in &filtered {
         let mut result = serde_json::json!({
             "rank": 1,
-            "result": event.to_client_event(),
+            "result": event.to_client_event().into_json(),
         });
 
         if include_context {
@@ -180,13 +202,19 @@ async fn search(
                 .get_room_events(&event.room_id, event.stream_position, before_limit, "b")
                 .await
             {
-                before_events = before.iter().map(|e| e.to_client_event()).collect();
+                before_events = before
+                    .iter()
+                    .map(|e| e.to_client_event().into_json())
+                    .collect();
             }
             if let Ok(after) = storage
                 .get_room_events(&event.room_id, event.stream_position, after_limit, "f")
                 .await
             {
-                after_events = after.iter().map(|e| e.to_client_event()).collect();
+                after_events = after
+                    .iter()
+                    .map(|e| e.to_client_event().into_json())
+                    .collect();
             }
 
             result["context"] = serde_json::json!({

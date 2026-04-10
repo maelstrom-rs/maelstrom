@@ -1,3 +1,23 @@
+//! Encryption key and to-device message storage.
+//!
+//! Implements both [`KeyStore`](crate::traits::KeyStore) and
+//! [`ToDeviceStore`](crate::traits::ToDeviceStore).
+//!
+//! **Device keys** are stored in the `device_key` table, keyed by
+//! `(user_id, device_id)`.
+//!
+//! **One-time keys** live in the `one_time_key` table.  `claim_one_time_keys`
+//! atomically selects and deletes a key in a single transaction, ensuring each
+//! pre-key is used exactly once.
+//!
+//! **Cross-signing keys** are stored in the `cross_signing_key` table, keyed by
+//! `(user_id, key_type)` where `key_type` is `master`, `self_signing`, or
+//! `user_signing`.
+//!
+//! **To-device messages** are queued in the `to_device` table with a
+//! `stream_position` for ordered delivery during `/sync`.  Messages are deleted
+//! once the client acknowledges receipt via the `since` token.
+
 use async_trait::async_trait;
 use surrealdb::types::SurrealValue;
 use tracing::debug;
@@ -203,7 +223,7 @@ impl KeyStore for SurrealStorage {
                             .query(
                                 "SELECT key_id, key_data FROM one_time_key \
                                  WHERE user_id = $uid AND device_id = $did AND string::starts_with(key_id, $prefix) \
-                                 LIMIT 1",
+                                 ORDER BY key_id ASC LIMIT 1",
                             )
                             .bind(("uid", uid.clone()))
                             .bind(("did", did.clone()))

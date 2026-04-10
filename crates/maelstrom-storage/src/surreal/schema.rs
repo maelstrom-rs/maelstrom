@@ -1,3 +1,14 @@
+//! Schema definitions and migrations.
+//!
+//! The canonical schema lives in `db/schema.surql` at the repository root and
+//! is embedded into the binary at compile time with `include_str!`.  This means
+//! the server binary is self-contained -- no external SQL files to deploy.
+//!
+//! [`bootstrap`] executes the full schema on every startup.  Every statement
+//! uses `DEFINE ... IF NOT EXISTS`, so re-running it against an existing
+//! database is a no-op for tables/indexes that already exist.  This makes
+//! rolling deployments safe without a separate migration tool.
+
 use tracing::info;
 
 use super::SurrealStorage;

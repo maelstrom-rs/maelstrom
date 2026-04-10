@@ -1,16 +1,90 @@
+//! Event operations -- send, retrieve, paginate, state management, and redaction.
+//!
+//! Implements the following Matrix Client-Server API endpoints
+//! ([spec: 9 Events](https://spec.matrix.org/v1.13/client-server-api/#events-2)):
+//!
+//! | Method | Path | Handler |
+//! |--------|------|---------|
+//! | `PUT`  | `/rooms/{roomId}/send/{eventType}/{txnId}` | Send a message event |
+//! | `GET`  | `/rooms/{roomId}/event/{eventId}` | Fetch a single event |
+//! | `GET`  | `/rooms/{roomId}/messages` | Paginate room timeline |
+//! | `PUT`  | `/rooms/{roomId}/state/{eventType}/{stateKey}` | Set state event |
+//! | `GET`  | `/rooms/{roomId}/state/{eventType}/{stateKey}` | Get state event |
+//! | `GET`  | `/rooms/{roomId}/state` | Get all current state |
+//! | `PUT`  | `/rooms/{roomId}/redact/{eventId}/{txnId}` | Redact an event |
+//!
+//! All endpoints are registered under both `/_matrix/client/v3` and the legacy
+//! `/_matrix/client/r0` prefix for Complement test compatibility.
+//!
+//! # Sending events
+//!
+//! **Message events** (`PUT /send`) are non-state events like `m.room.message`.
+//! The `{txnId}` path parameter enables client-side deduplication: if the same
+//! `(device_id, room_id, txn_id)` triple is seen again, the server returns the
+//! original `event_id` without storing a duplicate. Event content is validated
+//! for JSON correctness and capped at 65 KB.
+//!
+//! **State events** (`PUT /state`) have an additional `state_key` that
+//! distinguishes multiple events of the same type (e.g., per-user member
+//! events). Power-level checks are enforced: the sender's PL must meet or
+//! exceed the required PL from `m.room.power_levels.events[event_type]` or
+//! `state_default`. Users can always update their own `m.room.member` event
+//! (for profile changes). State events with identical content are idempotent.
+//!
+//! When a state event is written, `m.room.canonical_alias` content is validated
+//! to ensure referenced aliases actually exist and point to the correct room.
+//!
+//! # Retrieving events
+//!
+//! **Single event** (`GET /event`) returns one event by ID. Access is governed
+//! by the room's `m.room.history_visibility` setting:
+//! - `world_readable` -- anyone can see events
+//! - `shared` -- any current or former member
+//! - `invited` -- must have been at least invited at the event's stream position
+//! - `joined` -- must have been joined at the event's stream position
+//!
+//! **Messages** (`GET /messages`) paginates the room timeline forward (`dir=f`)
+//! or backward (`dir=b`) from a stream-position token. Supports `lazy_load_members`
+//! and `related_by_rel_types` (MSC3874) filters. For departed users, events are
+//! capped at the stream position of their leave event.
+//!
+//! **Full state** (`GET /state`) returns all current state events. For departed
+//! users, state is frozen at the point they left.
+//!
+//! # Redaction
+//!
+//! `PUT /redact` creates an `m.room.redaction` event and then strips the
+//! target event's content via `storage.redact_event()`. The redaction event
+//! itself is persisted in the timeline so other users see it in sync. Transaction
+//! ID deduplication applies to redactions the same as message sends.
+//!
+//! # Relations
+//!
+//! After storing a message event, [`extract_and_store_relation`] inspects the
+//! `m.relates_to` content field for relation metadata (threads, reactions,
+//! edits) and persists it as a separate relation record for efficient lookup.
+
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::events::pdu::{StoredEvent, generate_event_id, timestamp_ms};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::event::{Pdu, generate_event_id, timestamp_ms};
+use maelstrom_core::matrix::room::event_type as et;
+use maelstrom_core::matrix::room::{HistoryVisibility, Membership};
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
+use crate::handlers::util::require_membership;
 use crate::notify::Notification;
 use crate::state::AppState;
 
+/// Register all event operation routes.
+///
+/// Builds routes under both `/_matrix/client/v3` and `/_matrix/client/r0`
+/// prefixes for backward compatibility with older clients and the Complement
+/// test harness. Includes trailing-slash variants for state endpoints.
 pub fn routes() -> Router<AppState> {
     // Build routes for both v3 and r0 (Complement uses both)
     let mut router = Router::new();
@@ -57,6 +131,9 @@ pub fn routes() -> Router<AppState> {
 
 // -- PUT /rooms/{roomId}/send/{eventType}/{txnId} --
 
+/// Response for send, set-state, and redact operations.
+///
+/// Contains the `event_id` of the newly created (or deduplicated) event.
 #[derive(Serialize)]
 struct SendEventResponse {
     event_id: String,
@@ -73,22 +150,17 @@ async fn send_event(
     let device_id = auth.device_id.to_string();
 
     // Check txn_id dedup
-    if let Ok(Some(existing_event_id)) = storage.get_txn_event(&device_id, &txn_id).await {
+    if let Ok(Some(existing_event_id)) = storage.get_txn_event(&device_id, &room_id, &txn_id).await
+    {
         return Ok(Json(SendEventResponse {
             event_id: existing_event_id,
         }));
     }
 
     // Check user is joined
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
-    if membership != "join" {
+    if membership != Membership::Join.as_str() {
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
@@ -104,7 +176,7 @@ async fn send_event(
 
     // Create event
     let event_id = generate_event_id();
-    let event = StoredEvent {
+    let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.clone(),
         sender,
@@ -134,7 +206,7 @@ async fn send_event(
 
     // Store txn_id mapping
     storage
-        .store_txn_id(&device_id, &txn_id, &event_id)
+        .store_txn_id(&device_id, &room_id, &txn_id, &event_id)
         .await
         .map_err(crate::extractors::storage_error)?;
 
@@ -160,7 +232,7 @@ async fn get_event(
 
     // Check history_visibility for this room
     let history_visibility = storage
-        .get_state_event(&room_id, "m.room.history_visibility", "")
+        .get_state_event(&room_id, et::HISTORY_VISIBILITY, "")
         .await
         .ok()
         .and_then(|ev| {
@@ -169,21 +241,9 @@ async fn get_event(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| "shared".to_string());
+        .unwrap_or_else(|| HistoryVisibility::Shared.as_str().to_string());
 
-    // Check user membership
-    let membership = storage.get_membership(&sender, &room_id).await;
-
-    let is_member = membership.as_deref().map(|m| m == "join").unwrap_or(false);
-
-    // If not a member, check if world_readable
-    if !is_member && history_visibility != "world_readable" {
-        return Err(MatrixError::forbidden(
-            "You are not allowed to view this event",
-        ));
-    }
-    // world_readable: allow access without membership
-
+    // Fetch the event first
     let event = storage.get_event(&event_id).await.map_err(|e| match e {
         StorageError::NotFound => MatrixError::not_found("Event not found"),
         other => crate::extractors::storage_error(other),
@@ -193,11 +253,86 @@ async fn get_event(
         return Err(MatrixError::not_found("Event not found"));
     }
 
-    Ok(Json(event.to_client_event()))
+    // Check user membership
+    let membership = storage.get_membership(&sender, &room_id).await;
+    let is_joined = membership
+        .as_deref()
+        .map(|m| m == Membership::Join.as_str())
+        .unwrap_or(false);
+
+    // world_readable: anyone can see events
+    if history_visibility == HistoryVisibility::WorldReadable.as_str() {
+        let m = membership.as_deref().unwrap_or(Membership::Leave.as_str());
+        return Ok(Json(event.to_client_event().with_membership(m).into_json()));
+    }
+
+    // Not world_readable — must be a current or former member
+    if !is_joined && membership.is_err() {
+        // Never been a member — return 404 to not reveal room existence
+        return Err(MatrixError::not_found("Event not found"));
+    }
+
+    // For "joined" visibility, the user must have been joined when the event was sent
+    if history_visibility == HistoryVisibility::Joined.as_str() {
+        // Get the user's join event to see when they joined
+        let join_event = storage
+            .get_state_event(&room_id, et::MEMBER, &sender)
+            .await
+            .ok();
+
+        let user_joined_at = join_event
+            .as_ref()
+            .filter(|e| {
+                e.content.get("membership").and_then(|m| m.as_str())
+                    == Some(Membership::Join.as_str())
+            })
+            .map(|e| e.stream_position)
+            .unwrap_or(i64::MAX);
+
+        if event.stream_position < user_joined_at {
+            return Err(MatrixError::not_found("Event not found"));
+        }
+    }
+
+    // For "invited" visibility, user must have been at least invited at the time of the event.
+    if history_visibility == HistoryVisibility::Invited.as_str() {
+        // Check if the user had an invite or join membership at the event's stream position
+        let membership_at_event = storage
+            .get_state_event_at(&room_id, et::MEMBER, &sender, event.stream_position)
+            .await
+            .ok()
+            .and_then(|e| {
+                e.content
+                    .get("membership")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+            });
+
+        match membership_at_event.as_deref() {
+            Some(m) if m == Membership::Join.as_str() || m == Membership::Invite.as_str() => {
+                // User was invited or joined at the time — allow access
+            }
+            _ => {
+                // User wasn't yet invited at the time of this event
+                return Err(MatrixError::not_found("Event not found"));
+            }
+        }
+    }
+
+    // "shared" visibility: any current or former member can see
+    let m = membership.as_deref().unwrap_or(Membership::Leave.as_str());
+    Ok(Json(event.to_client_event().with_membership(m).into_json()))
 }
 
 // -- GET /rooms/{roomId}/messages --
 
+/// Query parameters for `GET /rooms/{roomId}/messages`.
+///
+/// - `from` / `to`: stream-position pagination tokens
+/// - `dir`: `"b"` for backward (newest-first, default) or `"f"` for forward
+/// - `limit`: max events to return (capped at 100)
+/// - `filter`: optional JSON filter supporting `lazy_load_members` and
+///   `related_by_rel_types`
 #[derive(Deserialize)]
 #[allow(dead_code)]
 struct MessagesQuery {
@@ -205,14 +340,22 @@ struct MessagesQuery {
     to: Option<String>,
     dir: Option<String>,
     limit: Option<usize>,
+    filter: Option<String>,
 }
 
+/// Response for `GET /rooms/{roomId}/messages`.
+///
+/// `chunk` contains the paginated events. `start` and `end` are stream-position
+/// tokens for continued pagination. `state` is present when `lazy_load_members`
+/// is enabled and contains `m.room.member` events for senders in the chunk.
 #[derive(Serialize)]
 struct MessagesResponse {
     chunk: Vec<serde_json::Value>,
     start: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<Vec<serde_json::Value>>,
 }
 
 async fn get_messages(
@@ -225,13 +368,7 @@ async fn get_messages(
     let sender = auth.user_id.to_string();
 
     // Check user is a member (or was a member)
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
     let dir = query.dir.as_deref().unwrap_or("b");
     let limit = query.limit.unwrap_or(10).min(100);
@@ -248,9 +385,9 @@ async fn get_messages(
     };
 
     // For departed users: limit messages to events up to when they left
-    let leave_pos = if membership == "leave" {
+    let leave_pos = if membership == Membership::Leave.as_str() {
         storage
-            .get_state_event(&room_id, "m.room.member", &sender)
+            .get_state_event(&room_id, et::MEMBER, &sender)
             .await
             .ok()
             .map(|e| e.stream_position)
@@ -276,14 +413,91 @@ async fn get_messages(
     let start = query.from.unwrap_or_else(|| from.to_string());
     let end = events.last().map(|e| e.stream_position.to_string());
 
+    // Parse filter JSON
+    let filter_json: Option<serde_json::Value> = query
+        .filter
+        .as_deref()
+        .and_then(|f| serde_json::from_str(f).ok());
+
+    let lazy_load = filter_json
+        .as_ref()
+        .and_then(|f| f.get("lazy_load_members")?.as_bool())
+        .unwrap_or(false);
+
+    // Check for related_by_rel_types filter (MSC3874)
+    let rel_type_filter: Option<Vec<String>> = filter_json
+        .as_ref()
+        .and_then(|f| f.get("related_by_rel_types"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+
+    // If rel_type filter is set, build a set of event IDs that have matching relations
+    let related_event_ids: Option<std::collections::HashSet<String>> =
+        if let Some(ref rel_types) = rel_type_filter {
+            let mut ids = std::collections::HashSet::new();
+            for event in &events {
+                for rel_type in rel_types {
+                    if let Ok(relations) = storage
+                        .get_relations(&event.event_id, Some(rel_type), None, 1, None)
+                        .await
+                        && !relations.is_empty()
+                    {
+                        ids.insert(event.event_id.clone());
+                    }
+                }
+            }
+            Some(ids)
+        } else {
+            None
+        };
+
     // Include message events and membership events, but exclude other state events
     let chunk: Vec<serde_json::Value> = events
-        .into_iter()
-        .filter(|e| !e.is_state() || e.event_type == "m.room.member")
-        .map(|e| e.to_client_event())
+        .iter()
+        .filter(|e| !e.is_state() || e.event_type == et::MEMBER)
+        .filter(|e| {
+            // If rel_type filter is active, only include events with matching relations
+            if let Some(ref ids) = related_event_ids {
+                ids.contains(&e.event_id)
+            } else {
+                true
+            }
+        })
+        .map(|e| {
+            e.to_client_event()
+                .with_membership(Membership::Join.as_str())
+                .into_json()
+        })
         .collect();
 
-    Ok(Json(MessagesResponse { chunk, start, end }))
+    // If lazy_load_members, include m.room.member state for senders in the chunk
+    let state = if lazy_load {
+        let mut seen_senders = std::collections::HashSet::new();
+        let mut state_events = Vec::new();
+        for event in &events {
+            if seen_senders.insert(event.sender.clone())
+                && let Ok(member_event) = storage
+                    .get_state_event(&room_id, et::MEMBER, &event.sender)
+                    .await
+            {
+                state_events.push(member_event.to_client_event().into_json());
+            }
+        }
+        Some(state_events)
+    } else {
+        None
+    };
+
+    Ok(Json(MessagesResponse {
+        chunk,
+        start,
+        end,
+        state,
+    }))
 }
 
 // -- PUT /rooms/{roomId}/state/{eventType}/{stateKey} --
@@ -320,25 +534,19 @@ async fn do_set_state(
     let sender = auth.user_id.to_string();
 
     // Check user is joined
-    let membership = storage
-        .get_membership(&sender, room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, room_id).await?;
 
-    if membership != "join" {
+    if membership != Membership::Join.as_str() {
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
     // Check power levels — user must have sufficient PL to send this state event.
     // Exception: users can always update their own m.room.member event (profile changes).
-    let is_own_member_event = event_type == "m.room.member" && state_key == sender;
+    let is_own_member_event = event_type == et::MEMBER && state_key == sender;
 
     if !is_own_member_event {
         let power_levels = storage
-            .get_state_event(room_id, "m.room.power_levels", "")
+            .get_state_event(room_id, et::POWER_LEVELS, "")
             .await
             .ok();
 
@@ -372,6 +580,14 @@ async fn do_set_state(
         }
     }
 
+    // Owned state: if state_key looks like a user ID, only that user can set it.
+    // Exception: m.room.member events have their own authorization rules.
+    if event_type != "m.room.member" && state_key.starts_with('@') && state_key != sender {
+        return Err(MatrixError::forbidden(
+            "Cannot set state with another user's ID as state_key",
+        ));
+    }
+
     // Validate content is re-serializable (catches NaN, Infinity, etc.)
     let content_str = serde_json::to_string(&content).map_err(|e| {
         MatrixError::bad_json(format!("Event content contains invalid JSON values: {e}"))
@@ -382,7 +598,7 @@ async fn do_set_state(
     }
 
     // Validate m.room.canonical_alias content
-    if event_type == "m.room.canonical_alias" {
+    if event_type == et::CANONICAL_ALIAS {
         if let Some(alias) = content.get("alias").and_then(|a| a.as_str())
             && !alias.is_empty()
         {
@@ -390,7 +606,7 @@ async fn do_set_state(
             if !alias.starts_with('#') || !alias.contains(':') {
                 return Err(MatrixError::new(
                     http::StatusCode::BAD_REQUEST,
-                    maelstrom_core::error::ErrorCode::InvalidParam,
+                    maelstrom_core::matrix::error::ErrorCode::InvalidParam,
                     format!("Invalid alias format: {alias}"),
                 ));
             }
@@ -414,7 +630,7 @@ async fn do_set_state(
                     if !alias.starts_with('#') || !alias.contains(':') {
                         return Err(MatrixError::new(
                             http::StatusCode::BAD_REQUEST,
-                            maelstrom_core::error::ErrorCode::InvalidParam,
+                            maelstrom_core::matrix::error::ErrorCode::InvalidParam,
                             format!("Invalid alias format: {alias}"),
                         ));
                     }
@@ -448,7 +664,7 @@ async fn do_set_state(
     }
 
     let event_id = generate_event_id();
-    let event = StoredEvent {
+    let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.to_string(),
         sender: sender.clone(),
@@ -476,7 +692,7 @@ async fn do_set_state(
         .map_err(crate::extractors::storage_error)?;
 
     // If this is a membership event, update the membership table too
-    if event_type == "m.room.member"
+    if event_type == et::MEMBER
         && let Some(ms) = event.content.get("membership").and_then(|v| v.as_str())
     {
         storage
@@ -550,20 +766,11 @@ async fn do_get_state(
     let sender = auth.user_id.to_string();
 
     // Check user has access
-    let membership = storage
-        .get_membership(&sender, room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, room_id).await?;
 
     // If user has left, return state from when they were in the room
-    let event = if membership == "leave" {
-        if let Ok(member_event) = storage
-            .get_state_event(room_id, "m.room.member", &sender)
-            .await
-        {
+    let event = if membership == Membership::Leave.as_str() {
+        if let Ok(member_event) = storage.get_state_event(room_id, et::MEMBER, &sender).await {
             storage
                 .get_state_event_at(room_id, event_type, state_key, member_event.stream_position)
                 .await
@@ -592,7 +799,7 @@ async fn do_get_state(
 
     // ?format=event returns full event, otherwise just content
     if format == Some("event") {
-        Ok(Json(event.to_client_event()))
+        Ok(Json(event.to_client_event().into_json()))
     } else {
         Ok(Json(event.content))
     }
@@ -609,13 +816,7 @@ async fn get_full_state(
     let sender = auth.user_id.to_string();
 
     // Check user has access
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
     let events = storage
         .get_current_state(&room_id)
@@ -623,11 +824,8 @@ async fn get_full_state(
         .map_err(crate::extractors::storage_error)?;
 
     // If user has left, return state from when they were in the room
-    let events = if membership == "leave" {
-        if let Ok(member_event) = storage
-            .get_state_event(&room_id, "m.room.member", &sender)
-            .await
-        {
+    let events = if membership == Membership::Leave.as_str() {
+        if let Ok(member_event) = storage.get_state_event(&room_id, et::MEMBER, &sender).await {
             let leave_pos = member_event.stream_position;
             // Keep only state events that existed before the user left
             // For each (event_type, state_key), use the version from before leave
@@ -642,14 +840,20 @@ async fn get_full_state(
         events
     };
 
-    let client_events: Vec<serde_json::Value> =
-        events.into_iter().map(|e| e.to_client_event()).collect();
+    let client_events: Vec<serde_json::Value> = events
+        .into_iter()
+        .map(|e| e.to_client_event().into_json())
+        .collect();
 
     Ok(Json(client_events))
 }
 
 // -- PUT /rooms/{roomId}/redact/{eventId}/{txnId} --
 
+/// Request body for `PUT /rooms/{roomId}/redact/{eventId}/{txnId}`.
+///
+/// An optional `reason` can be provided and will be stored in the redaction
+/// event's content.
 #[derive(Deserialize)]
 struct RedactRequest {
     reason: Option<String>,
@@ -666,22 +870,17 @@ async fn redact_event(
     let device_id = auth.device_id.to_string();
 
     // Check txn_id dedup
-    if let Ok(Some(existing_event_id)) = storage.get_txn_event(&device_id, &txn_id).await {
+    if let Ok(Some(existing_event_id)) = storage.get_txn_event(&device_id, &room_id, &txn_id).await
+    {
         return Ok(Json(SendEventResponse {
             event_id: existing_event_id,
         }));
     }
 
     // Check user is joined
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
-    if membership != "join" {
+    if membership != Membership::Join.as_str() {
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
@@ -693,7 +892,7 @@ async fn redact_event(
 
     // Create the redaction event
     let event_id = generate_event_id();
-    let event = StoredEvent {
+    let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.clone(),
         sender,
@@ -721,7 +920,7 @@ async fn redact_event(
 
     // Store txn_id mapping
     storage
-        .store_txn_id(&device_id, &txn_id, &event_id)
+        .store_txn_id(&device_id, &room_id, &txn_id, &event_id)
         .await
         .map_err(crate::extractors::storage_error)?;
 
@@ -736,10 +935,7 @@ async fn redact_event(
 }
 
 /// Extract `m.relates_to` from event content and store as a relation record.
-async fn extract_and_store_relation(
-    storage: &dyn maelstrom_storage::traits::Storage,
-    event: &StoredEvent,
-) {
+async fn extract_and_store_relation(storage: &dyn maelstrom_storage::traits::Storage, event: &Pdu) {
     let relates_to = match event.content.get("m.relates_to") {
         Some(r) => r,
         None => return,

@@ -1,3 +1,16 @@
+//! Database connection and initialization.
+//!
+//! Provides [`SurrealConfig`] (endpoint, namespace, database, credentials) and
+//! the [`SurrealStorage::connect`] constructor that:
+//!
+//! 1. Opens a connection to the configured endpoint (WebSocket, in-memory, or
+//!    RocksDB embedded).
+//! 2. Authenticates as root.
+//! 3. Selects the target namespace and database.
+//! 4. Runs the schema bootstrap (see [`super::schema`]).
+//!
+//! The returned [`SurrealStorage`] is ready to use immediately.
+
 use surrealdb::engine::any;
 use surrealdb::opt::auth::Root;
 use tracing::info;

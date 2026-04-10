@@ -1,8 +1,109 @@
+//! Maelstrom -- a Matrix homeserver written in Rust.
+//!
+//! This is the main entry point that wires together every subsystem and starts
+//! the HTTP server.
+//!
+//! ## Startup sequence
+//!
+//! 1. **Configuration** -- Loads a TOML config file from the path in
+//!    `$MAELSTROM_CONFIG` (default: `config/local.toml`). See [`Config`] for
+//!    the full schema.
+//!
+//! 2. **Database** -- Connects to SurrealDB using the `[database]` section
+//!    (endpoint, namespace, database, credentials).
+//!
+//! 3. **Admin bootstrap** -- If `server.admin_user` is set, creates that user
+//!    (or ensures the `is_admin` flag) so the operator has immediate access.
+//!
+//! 4. **Notifier and rate limiter** -- Initializes in-process broadcast channels
+//!    for `/sync` wake-ups and the in-memory rate limiter.
+//!
+//! 5. **Media store** (optional) -- Connects to the S3-compatible object store
+//!    (RustFS / MinIO) from the `[media]` section. If absent or unreachable,
+//!    media endpoints return errors but the server still starts. When connected,
+//!    spawns the media retention background task.
+//!
+//! 6. **Signing key** -- Loads the server's Ed25519 signing key from the DB, or
+//!    generates and stores a new one on first boot. Used for federation event
+//!    signatures.
+//!
+//! 7. **Ephemeral store and cluster** -- Builds the in-memory ephemeral store
+//!    for typing notifications and presence. If a `[cluster]` section is present,
+//!    starts chitchat UDP gossip for cross-node propagation of ephemeral state.
+//!
+//! 8. **Federation** -- Builds the federation HTTP client (with optional CA for
+//!    Complement testing) and the federation router (Server-Server API).
+//!
+//! 9. **Admin and CS API** -- Builds the admin dashboard/API router and the
+//!    Client-Server API router, then merges all three into one Axum application.
+//!
+//! 10. **TLS listener** (optional) -- If `server.federation_address`, `tls_cert`,
+//!     and `tls_key` are all set, spawns a separate TLS listener on port 8448
+//!     for federation traffic.
+//!
+//! 11. **Serve** -- Binds the main listener on `server.bind_address` and serves.
+//!
+//! ## Config file format
+//!
+//! The configuration is TOML with four sections:
+//!
+//! ```toml
+//! [server]
+//! bind_address = "0.0.0.0:8008"
+//! server_name = "example.com"
+//! public_base_url = "https://example.com"
+//! admin_user = "admin"               # optional, bootstraps admin account
+//! federation_address = "0.0.0.0:8448" # optional, enables TLS federation
+//! tls_cert = "/path/to/cert.pem"     # required if federation_address is set
+//! tls_key = "/path/to/key.pem"       # required if federation_address is set
+//!
+//! [database]
+//! endpoint = "ws://localhost:8000"
+//! namespace = "maelstrom"
+//! database = "maelstrom"
+//! username = "root"
+//! password = "root"
+//!
+//! [media]                            # optional -- omit to disable media
+//! endpoint = "http://localhost:9000"
+//! bucket = "maelstrom-media"
+//! access_key = "maelstrom"
+//! secret_key = "maelstrom"
+//! region = "us-east-1"
+//! max_age_days = 90                  # 0 = no retention (default)
+//! sweep_interval_secs = 3600
+//!
+//! [cluster]                          # optional -- omit for single-node
+//! listen_addr = "0.0.0.0:7280"
+//! seed_nodes = ["node2:7280"]
+//! cluster_id = "maelstrom"
+//! ```
+//!
+//! ## Single-node vs. cluster mode
+//!
+//! Without a `[cluster]` section the server runs as a standalone instance with a
+//! purely local ephemeral store. With `[cluster]`, it joins a chitchat gossip
+//! mesh: typing notifications and presence updates are propagated to all nodes
+//! via UDP, so any node can serve `/sync` for any user.
+//!
+//! ## Docker deployment
+//!
+//! The project ships a `Dockerfile` (and `Dockerfile.complement` for CI) that
+//! builds a static release binary and bundles it with the config, templates, and
+//! static assets. The recommended production stack is:
+//!
+//! - **Maelstrom** container(s) behind a reverse proxy (Caddy/nginx)
+//! - **SurrealDB** as the primary data store
+//! - **RustFS** (or MinIO) for S3-compatible media storage
+//!
+//! Environment variable `MAELSTROM_CONFIG` points to the TOML config path
+//! inside the container (default `config/local.toml`).
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::info;
 
-use maelstrom_core::identifiers::ServerName;
+use maelstrom_core::matrix::id::ServerName;
 use maelstrom_storage::surreal::connection::SurrealConfig;
 
 /// Top-level configuration, deserialized from TOML.
@@ -17,6 +118,7 @@ struct Config {
     cluster: Option<ClusterConfig>,
 }
 
+/// Listener addresses, TLS paths, and server identity.
 #[derive(Debug, Deserialize)]
 struct ServerConfig {
     bind_address: String,
@@ -24,8 +126,17 @@ struct ServerConfig {
     public_base_url: String,
     /// Username to grant admin on startup (e.g. "admin"). Created if absent.
     admin_user: Option<String>,
+    /// Federation TLS bind address (e.g. "0.0.0.0:8448"). Optional.
+    federation_address: Option<String>,
+    /// Path to TLS certificate file (PEM).
+    tls_cert: Option<String>,
+    /// Path to TLS private key file (PEM).
+    tls_key: Option<String>,
+    /// Path to CA certificate for federation TLS verification (e.g. Complement CA).
+    complement_ca: Option<String>,
 }
 
+/// SurrealDB connection parameters.
 #[derive(Debug, Deserialize)]
 struct DatabaseConfig {
     endpoint: String,
@@ -35,6 +146,7 @@ struct DatabaseConfig {
     password: String,
 }
 
+/// S3-compatible object storage for media (RustFS / MinIO).
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct MediaConfig {
@@ -53,6 +165,7 @@ fn default_sweep_interval() -> u64 {
     3600
 }
 
+/// Chitchat gossip cluster settings for horizontal scaling.
 #[derive(Debug, Deserialize)]
 struct ClusterConfig {
     /// UDP address for chitchat gossip (e.g. "0.0.0.0:7280")
@@ -71,6 +184,9 @@ fn default_cluster_id() -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider (ring)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -184,12 +300,9 @@ async fn main() -> Result<()> {
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
             info!(key_id = %key_record.key_id, "Loaded existing signing key");
-            maelstrom_core::signatures::keys::KeyPair::from_bytes(
-                key_record.key_id.clone(),
-                &key_bytes,
-            )
+            maelstrom_core::matrix::keys::KeyPair::from_bytes(key_record.key_id.clone(), &key_bytes)
         } else {
-            let kp = maelstrom_core::signatures::keys::KeyPair::generate();
+            let kp = maelstrom_core::matrix::keys::KeyPair::generate();
             use base64::Engine;
             let engine = base64::engine::general_purpose::STANDARD_NO_PAD;
             let record = maelstrom_storage::traits::ServerKeyRecord {
@@ -242,7 +355,7 @@ async fn main() -> Result<()> {
             extra_liveness_predicate: None,
         };
 
-        let (store, delta_rx) = maelstrom_core::ephemeral::EphemeralStore::with_gossip();
+        let (store, delta_rx) = maelstrom_core::matrix::ephemeral::EphemeralStore::with_gossip();
         let ephemeral = std::sync::Arc::new(store);
 
         let chitchat_handle =
@@ -266,10 +379,19 @@ async fn main() -> Result<()> {
 
         (ephemeral, Some((chitchat_handle, bridge)))
     } else {
-        let ephemeral = std::sync::Arc::new(maelstrom_core::ephemeral::EphemeralStore::new());
+        let ephemeral =
+            std::sync::Arc::new(maelstrom_core::matrix::ephemeral::EphemeralStore::new());
         info!("Single-node mode (no [cluster] config)");
         (ephemeral, None)
     };
+
+    // Build federation client (shared between federation state and CS API)
+    let federation_client =
+        std::sync::Arc::new(maelstrom_federation::client::FederationClient::with_ca(
+            signing_key.clone(),
+            server_name.clone(),
+            config.server.complement_ca.as_deref(),
+        ));
 
     // Build federation state and router
     let federation_state = maelstrom_federation::FederationState::new(
@@ -316,10 +438,42 @@ async fn main() -> Result<()> {
             config.server.public_base_url,
         )
     };
+    let state = state.with_federation(federation_client);
 
     let app = maelstrom_api::router::build(state)
         .merge(federation_router)
         .merge(admin_router);
+
+    // Start optional TLS listener for federation (port 8448)
+    if let (Some(fed_addr), Some(cert_path), Some(key_path)) = (
+        &config.server.federation_address,
+        &config.server.tls_cert,
+        &config.server.tls_key,
+    ) {
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
+                .await
+                .context("Failed to load TLS certificates")?;
+
+        let fed_app = app.clone();
+        let fed_addr: std::net::SocketAddr =
+            fed_addr.parse().context("Invalid federation_address")?;
+
+        info!(
+            address = %fed_addr,
+            "Listening for federation (TLS)"
+        );
+
+        // Spawn federation TLS listener in background
+        tokio::spawn(async move {
+            if let Err(e) = axum_server::bind_rustls(fed_addr, rustls_config)
+                .serve(fed_app.into_make_service())
+                .await
+            {
+                tracing::error!(error = %e, "Federation TLS listener failed");
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(&config.server.bind_address)
         .await

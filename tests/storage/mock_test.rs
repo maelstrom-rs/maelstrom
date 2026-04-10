@@ -1,4 +1,4 @@
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 use maelstrom_storage::mock::MockStorage;
 use maelstrom_storage::traits::*;
 

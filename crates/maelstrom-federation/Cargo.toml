@@ -19,3 +19,4 @@ chrono = { workspace = true }
 base64 = { workspace = true }
 async-trait = { workspace = true }
 rand = { workspace = true }
+dashmap = { workspace = true }

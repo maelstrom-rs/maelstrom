@@ -1,3 +1,19 @@
+//! Room metadata and membership storage -- [`RoomStore`](crate::traits::RoomStore) implementation.
+//!
+//! Rooms are stored in the `room` table.  Membership is modeled as a SurrealDB
+//! graph edge: `user ->member_of-> room` with a `membership` field on the edge
+//! (`join`, `invite`, `leave`, `ban`).  This enables efficient queries like
+//! "all rooms a user has joined" or "all members of a room" via graph
+//! traversal rather than scanning a flat membership table.
+//!
+//! Room aliases are stored in a separate `room_alias` table.  The public room
+//! directory (`get_public_rooms`) supports optional keyword filtering and
+//! cursor-based pagination.
+//!
+//! Room upgrades are modeled as `room ->upgrades_to-> room` graph edges,
+//! allowing `get_room_predecessors` to walk the chain backward in a single
+//! recursive traversal.
+
 use async_trait::async_trait;
 use surrealdb::types::{RecordId, SurrealValue};
 use tracing::debug;

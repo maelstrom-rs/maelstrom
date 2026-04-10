@@ -1,20 +1,55 @@
+//! Access-token authentication extractor for Matrix endpoints.
+//!
+//! This module implements the authentication gate for the Client-Server API.
+//! In Matrix, clients authenticate by sending an access token obtained during
+//! login or registration.  The token can appear in two places (the spec
+//! requires servers to check both):
+//!
+//! 1. The `Authorization: Bearer <token>` HTTP header (preferred).
+//! 2. The `access_token=<token>` query parameter (legacy, but still used by
+//!    some clients and for browser-based requests like media downloads).
+//!
+//! The extractor looks up the token in storage to resolve the associated user
+//! and device.  If the token is missing or invalid, the handler never runs --
+//! Axum returns a `401 M_UNKNOWN_TOKEN` or `401 M_MISSING_TOKEN` error
+//! directly.
+
 use axum::extract::FromRequestParts;
 use http::request::Parts;
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 
 use crate::state::AppState;
 
-/// Extractor that validates an access token and provides authenticated user info.
+/// The authentication gate for Matrix Client-Server API endpoints.
 ///
-/// Extracts the access token from either:
-/// - `Authorization: Bearer <token>` header
-/// - `access_token=<token>` query parameter
+/// Including `AuthenticatedUser` in a handler's parameter list is all you need
+/// to require a valid access token.  Axum calls `from_request_parts` before
+/// your handler runs, so by the time your handler executes, you are guaranteed
+/// to have a valid `user_id` and `device_id`.
 ///
-/// Looks up the token in storage and resolves the associated user and device.
+/// # Token resolution
+///
+/// 1. Checks the `Authorization: Bearer <token>` header first.
+/// 2. Falls back to the `access_token` query parameter.
+/// 3. Looks up the token in the device store to resolve the owning user and device.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// async fn get_profile(
+///     State(state): State<AppState>,
+///     user: AuthenticatedUser,  // <-- this line enforces auth
+/// ) -> Result<Json<ProfileResponse>, MatrixError> {
+///     // user.user_id and user.device_id are valid here
+/// }
+/// ```
 pub struct AuthenticatedUser {
+    /// The fully-qualified Matrix user ID (e.g. `@alice:example.com`).
     pub user_id: UserId,
+    /// The device ID that owns this access token.
     pub device_id: DeviceId,
+    /// The raw access token string (useful for token revocation).
     pub access_token: String,
 }
 

@@ -1,9 +1,21 @@
+//! Shared handler utilities -- small functions used across multiple handlers.
+//!
+//! This module collects helper functions that don't belong to any single spec
+//! section but are needed by many handlers: token generation, password hashing,
+//! membership checks, and URL encoding.
+
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_storage::traits::StorageError;
 use rand::Rng;
 use rand::rngs::OsRng;
 
 /// Generate a random access token.
+///
+/// Produces a 47-character string: the `mat_` prefix followed by 43
+/// cryptographically random alphanumeric characters.  The prefix makes
+/// it easy to identify leaked tokens in logs or secret scanners.
 pub fn generate_access_token() -> String {
     let token: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -13,17 +25,25 @@ pub fn generate_access_token() -> String {
     format!("mat_{token}")
 }
 
-/// Generate a random session ID for UIA flows.
+/// Generate a random session ID for User-Interactive Authentication (UIA) flows.
+///
+/// UIA is Matrix's multi-step authentication protocol (used during
+/// registration, password changes, etc.).  The session ID ties together
+/// the steps in a single flow.  24 alphanumeric characters gives plenty
+/// of entropy to prevent collisions.
 pub fn generate_session_id() -> String {
-    let id: String = rand::thread_rng()
+    rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(24)
         .map(char::from)
-        .collect();
-    id
+        .collect()
 }
 
-/// Generate a random localpart for users who don't specify a username.
+/// Generate a random lowercase localpart for guest or anonymous registrations.
+///
+/// When a client registers without specifying a `username`, the server
+/// auto-assigns one.  This produces a 12-character lowercase alphanumeric
+/// string (e.g. `a3bf9xk2m1qw`).
 pub fn generate_localpart() -> String {
     let part: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -33,8 +53,48 @@ pub fn generate_localpart() -> String {
     part.to_lowercase()
 }
 
-/// Hash a password using Argon2id.
-/// Runs on a blocking thread to avoid stalling the Tokio runtime.
+/// Check that a user has a membership record in a room, returning the
+/// membership state string (e.g. `"join"`, `"invite"`, `"leave"`).
+///
+/// This is the standard access-control gate used before any room operation.
+/// Almost every room-scoped handler (send message, get state, read events,
+/// set typing, ...) calls this first to verify the user is actually in the
+/// room.
+///
+/// If no membership record exists at all, returns `403 M_FORBIDDEN` with
+/// "You are not in this room".  Callers that need a *specific* membership
+/// state (e.g. only `join`) should check the returned string themselves:
+///
+/// ```rust,ignore
+/// let membership = require_membership(storage, &user_id, &room_id).await?;
+/// if membership != Membership::Join.as_str() {
+///     return Err(MatrixError::forbidden("You must be joined to this room"));
+/// }
+/// ```
+pub async fn require_membership(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    user_id: &str,
+    room_id: &str,
+) -> Result<String, MatrixError> {
+    storage
+        .get_membership(user_id, room_id)
+        .await
+        .map_err(|e| match e {
+            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
+            other => crate::extractors::storage_error(other),
+        })
+}
+
+/// Hash a password using Argon2id with a random salt.
+///
+/// # Security notes
+///
+/// - **Argon2id** is a memory-hard KDF, making brute-force attacks expensive
+///   even on GPUs.  It's the OWASP-recommended choice for password storage.
+/// - Runs on [`tokio::task::spawn_blocking`] because Argon2 is intentionally
+///   CPU- and memory-intensive.  Running it on the async executor would stall
+///   other tasks on the same Tokio worker thread.
+/// - The salt is generated from `OsRng` (OS-level CSPRNG).
 pub async fn hash_password(password: &str) -> Result<String, String> {
     let password = password.to_string();
     tokio::task::spawn_blocking(move || {
@@ -49,8 +109,11 @@ pub async fn hash_password(password: &str) -> Result<String, String> {
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
-/// Verify a password against an Argon2id hash.
-/// Runs on a blocking thread to avoid stalling the Tokio runtime.
+/// Verify a plaintext password against a stored Argon2id hash.
+///
+/// Like [`hash_password`], this runs on a blocking thread because Argon2
+/// verification is deliberately slow.  Returns `Ok(())` on match or an
+/// error string describing the failure.
 pub async fn verify_password(password: String, hash: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let parsed_hash =
@@ -61,4 +124,12 @@ pub async fn verify_password(password: String, hash: String) -> Result<(), Strin
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// Percent-encode a string for safe inclusion in URL path segments.
+///
+/// Used when embedding room IDs, event IDs, or user IDs (which contain
+/// `!`, `$`, `@`, `:` characters) into federation request paths.
+pub fn percent_encode(input: &str) -> String {
+    urlencoding::encode(input).into_owned()
 }

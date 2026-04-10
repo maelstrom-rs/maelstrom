@@ -1,3 +1,80 @@
+//! Sync endpoints -- traditional `/sync` and sliding sync.
+//!
+//! Implements the following Matrix Client-Server API endpoints
+//! ([spec: 10 Sync](https://spec.matrix.org/v1.13/client-server-api/#syncing)):
+//!
+//! | Method | Path | Handler |
+//! |--------|------|---------|
+//! | `GET`  | `/_matrix/client/v3/sync` | Traditional sync |
+//! | `POST` | `/_matrix/client/v3/sync` | Sliding sync (MSC3575) |
+//!
+//! # Traditional sync (`GET /sync`)
+//!
+//! The workhorse of the Matrix protocol. Every client polls this endpoint to
+//! receive new events and state changes.
+//!
+//! ## Initial vs incremental
+//!
+//! - **Initial sync** (`since` absent): Returns full state and recent timeline
+//!   events for every joined room, all pending invites, left rooms (if the
+//!   filter includes them), global account data, and to-device messages.
+//! - **Incremental sync** (`since` = previous `next_batch`): Returns only the
+//!   delta since that stream position -- new events, membership changes, and
+//!   newly-joined rooms (which receive full state so the client can render them).
+//!
+//! ## Long-polling via Notifier
+//!
+//! When `timeout > 0` and there are no new events, the handler subscribes to
+//! the [`Notifier`](crate::notify::Notifier) for the user's joined rooms and
+//! waits via `tokio::select!` until either an event arrives or the timeout
+//! elapses. After waking, the handler re-queries for changes and returns.
+//!
+//! ## Response assembly
+//!
+//! The sync response is organized into sections:
+//! - **`rooms.join`** -- Per-room objects containing `state`, `timeline`
+//!   (with `prev_batch` for backward pagination), `ephemeral` (typing
+//!   indicators, read receipts), `unread_notifications`, `account_data`,
+//!   and `summary` (member counts).
+//! - **`rooms.invite`** -- Stripped state for rooms with pending invites
+//!   (filtered to exclude invites from ignored users).
+//! - **`rooms.leave`** -- Timeline and state for rooms the user has departed
+//!   (respects `history_visibility`).
+//! - **`to_device`** -- Encrypted key-sharing and other device-to-device messages.
+//! - **`device_lists`** -- Users whose device lists changed since `since`.
+//! - **`account_data`** -- Global account data (push rules, ignored users, etc.).
+//! - **`presence`** -- Presence status for users in shared rooms.
+//!
+//! ## The `since` token system (stream positions)
+//!
+//! Every event stored in the database is assigned a monotonically increasing
+//! `stream_position` (i64). The `next_batch` token in the response is the
+//! current maximum stream position, and the client sends it back as `since` on
+//! the next request. **Important:** `next_batch` is set to `current_position`
+//! (not `current_position + 1`) because the query uses exclusive lower bounds
+//! (`stream_position > since`).
+//!
+//! ## Filters
+//!
+//! The `filter` query parameter accepts either inline JSON or a stored filter
+//! ID (looked up from account data). Supported filter fields include
+//! `room.timeline.limit`, `room.timeline.types`, `room.state.types`,
+//! `room.state.lazy_load_members`, and `room.include_leave`.
+//!
+//! # Sliding sync (`POST /sync`, MSC3575)
+//!
+//! A bandwidth-efficient alternative where the client declares named **room
+//! lists** with index ranges (e.g., "show me rooms 0-19 sorted by recency").
+//! The server returns data only for rooms within the requested ranges that
+//! have changed since the last `pos`.
+//!
+//! Key differences from traditional sync:
+//! - Rooms are sorted by latest activity (most recent first).
+//! - The response includes `lists` with `SYNC` operations containing room IDs.
+//! - Room data uses `required_state` patterns instead of sending all state.
+//! - Extensions (`e2ee`, `to_device`, `account_data`) are opt-in.
+//! - The `pos` token works the same way as `next_batch` (stream position).
+
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -6,11 +83,17 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::room::{HistoryVisibility, Membership, event_type as et};
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::state::AppState;
 
+/// Register sync routes.
+///
+/// Routes:
+/// - `GET  /_matrix/client/v3/sync` -- traditional sync (initial + incremental)
+/// - `POST /_matrix/client/v3/sync` -- sliding sync (MSC3575)
 pub fn routes() -> Router<AppState> {
     Router::new().route("/_matrix/client/v3/sync", get(sync).post(sliding_sync))
 }
@@ -19,14 +102,29 @@ pub fn routes() -> Router<AppState> {
 // Traditional GET /sync
 // ---------------------------------------------------------------------------
 
+/// Query parameters for `GET /sync`.
+///
+/// - `since`: stream-position token from a previous `next_batch` (omit for
+///   initial sync)
+/// - `timeout`: long-poll duration in milliseconds (0 = return immediately)
+/// - `full_state`: if true, include full state even for incremental syncs
+/// - `filter`: inline JSON filter or a stored filter ID
+/// - `set_presence`: override automatic presence (`"online"`, `"offline"`,
+///   `"unavailable"`)
 #[derive(Deserialize)]
 struct SyncQuery {
     since: Option<String>,
     timeout: Option<u64>,
     full_state: Option<bool>,
     filter: Option<String>,
+    set_presence: Option<String>,
 }
 
+/// Top-level response for `GET /sync`.
+///
+/// The `next_batch` token must be passed as `since` on the next sync request.
+/// All other fields are populated based on what changed since the previous
+/// sync (or everything, for an initial sync).
 #[derive(Serialize)]
 struct SyncResponse {
     next_batch: String,
@@ -35,8 +133,22 @@ struct SyncResponse {
     to_device: Option<SyncToDevice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_lists: Option<DeviceLists>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_data: Option<AccountDataResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence: Option<PresenceResponse>,
 }
 
+#[derive(Serialize)]
+struct PresenceResponse {
+    events: Vec<serde_json::Value>,
+}
+
+/// Device list change tracking for E2EE key management.
+///
+/// `changed` lists user IDs whose device lists have been updated since the
+/// previous sync. `left` lists user IDs who no longer share any rooms with
+/// the syncing user (their device keys can be discarded).
 #[derive(Serialize)]
 struct DeviceLists {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -50,6 +162,11 @@ struct SyncToDevice {
     events: Vec<serde_json::Value>,
 }
 
+/// Container for per-room data in the sync response.
+///
+/// - `join`: rooms the user is currently joined to (keyed by room ID)
+/// - `invite`: rooms with pending invites (stripped state only)
+/// - `leave`: rooms the user has left or been kicked/banned from
 #[derive(Serialize)]
 struct RoomsResponse {
     join: HashMap<String, JoinedRoomResponse>,
@@ -58,13 +175,44 @@ struct RoomsResponse {
 }
 
 #[derive(Serialize)]
+struct AccountDataResponse {
+    events: Vec<serde_json::Value>,
+}
+
+/// Per-room data for a joined room in the sync response.
+///
+/// - `timeline`: recent events with a `prev_batch` token for backward pagination
+/// - `state`: state events not already in the timeline (or full state on initial sync)
+/// - `ephemeral`: typing notifications, read receipts, and other transient events
+/// - `unread_notifications`: highlight and notification counts
+/// - `account_data`: per-room account data (tags, etc.)
+/// - `summary`: joined/invited member counts
+#[derive(Serialize)]
 struct JoinedRoomResponse {
     timeline: TimelineResponse,
     state: StateResponse,
     ephemeral: EphemeralResponse,
     unread_notifications: UnreadNotifications,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_data: Option<AccountDataResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<RoomSummary>,
 }
 
+#[derive(Serialize)]
+struct RoomSummary {
+    #[serde(rename = "m.joined_member_count")]
+    joined_member_count: u64,
+    #[serde(rename = "m.invited_member_count")]
+    invited_member_count: u64,
+}
+
+/// Timeline section of a joined room.
+///
+/// `events` contains the actual timeline events in chronological order.
+/// `prev_batch` is a stream-position token the client can use to paginate
+/// backward via `GET /messages`. `limited` indicates whether the server
+/// truncated the timeline (gap detection).
 #[derive(Serialize)]
 struct TimelineResponse {
     events: Vec<serde_json::Value>,
@@ -95,6 +243,19 @@ async fn sync(
 ) -> Result<Json<SyncResponse>, MatrixError> {
     let storage = state.storage();
     let user_id = auth.user_id.to_string();
+
+    // Handle set_presence query parameter
+    if let Some(ref presence) = query.set_presence {
+        match presence.as_str() {
+            "online" | "offline" | "unavailable" => {
+                state.ephemeral().set_presence(&user_id, presence, None);
+            }
+            _ => {} // ignore invalid values
+        }
+    } else {
+        // Default: set user to "online" on sync
+        state.ephemeral().set_presence(&user_id, "online", None);
+    }
 
     let since: i64 = query
         .since
@@ -163,6 +324,14 @@ async fn sync(
                 .collect()
         });
 
+    let lazy_load_members = sync_filter
+        .as_ref()
+        .and_then(|f| f.get("room"))
+        .and_then(|r| r.get("state"))
+        .and_then(|s| s.get("lazy_load_members"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // Get user's rooms by membership state
     let joined_rooms = storage
         .get_joined_rooms(&user_id)
@@ -186,9 +355,16 @@ async fn sync(
 
     // Build the sync response
     let join_map = if is_initial {
-        build_initial_sync(storage, &joined_rooms, current_position).await?
+        build_initial_sync(
+            storage,
+            &joined_rooms,
+            current_position,
+            &user_id,
+            lazy_load_members,
+        )
+        .await?
     } else {
-        build_incremental_sync(storage, &joined_rooms, since, &user_id).await?
+        build_incremental_sync(storage, &joined_rooms, since, &user_id, timeline_limit).await?
     };
 
     // Fetch to-device messages
@@ -205,8 +381,28 @@ async fn sync(
     }
 
     // Check ephemeral events (typing, receipts) before deciding to long-poll
-    let join_map =
+    let mut join_map =
         add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms).await?;
+
+    // Add per-room account_data to rooms in the join map
+    if !is_initial {
+        for (room_id, room_response) in join_map.iter_mut() {
+            let room_ad = storage
+                .get_all_room_account_data(&user_id, room_id)
+                .await
+                .unwrap_or_default();
+            if !room_ad.is_empty() {
+                room_response.account_data = Some(AccountDataResponse {
+                    events: room_ad
+                        .into_iter()
+                        .map(|(dtype, content)| {
+                            serde_json::json!({ "type": dtype, "content": content })
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
 
     // Check if there are any new events (including ephemeral)
     let has_events = !join_map.is_empty() || !to_device_events.is_empty();
@@ -229,7 +425,7 @@ async fn sync(
             .await
             .map_err(crate::extractors::storage_error)?;
 
-        let join_map = build_incremental_sync_with_ephemeral(
+        let mut join_map = build_incremental_sync_with_ephemeral(
             storage,
             state.ephemeral(),
             &joined_rooms,
@@ -237,6 +433,46 @@ async fn sync(
             &user_id,
         )
         .await?;
+
+        // Check per-room account_data for all joined rooms (handles account_data-only changes)
+        for room_id in &joined_rooms {
+            let room_ad = storage
+                .get_all_room_account_data(&user_id, room_id)
+                .await
+                .unwrap_or_default();
+            if !room_ad.is_empty() {
+                let ad_response = AccountDataResponse {
+                    events: room_ad
+                        .into_iter()
+                        .map(|(dtype, content)| {
+                            serde_json::json!({ "type": dtype, "content": content })
+                        })
+                        .collect(),
+                };
+                if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
+                    room_response.account_data = Some(ad_response);
+                } else {
+                    join_map.insert(
+                        room_id.clone(),
+                        JoinedRoomResponse {
+                            state: StateResponse { events: vec![] },
+                            timeline: TimelineResponse {
+                                events: vec![],
+                                prev_batch: since.to_string(),
+                                limited: false,
+                            },
+                            ephemeral: EphemeralResponse { events: vec![] },
+                            unread_notifications: UnreadNotifications {
+                                highlight_count: 0,
+                                notification_count: 0,
+                            },
+                            account_data: Some(ad_response),
+                            summary: None,
+                        },
+                    );
+                }
+            }
+        }
 
         let to_device_events = storage
             .get_to_device_messages(&user_id, &device_id, since)
@@ -254,13 +490,12 @@ async fn sync(
             let invite_state: Vec<serde_json::Value> = state
                 .iter()
                 .filter(|e| {
-                    e.event_type == "m.room.create"
-                        || e.event_type == "m.room.join_rules"
-                        || e.event_type == "m.room.name"
-                        || (e.event_type == "m.room.member"
-                            && e.state_key.as_deref() == Some(&user_id))
+                    e.event_type == et::CREATE
+                        || e.event_type == et::JOIN_RULES
+                        || e.event_type == et::NAME
+                        || (e.event_type == et::MEMBER && e.state_key.as_deref() == Some(&user_id))
                 })
-                .map(|e| e.to_client_event())
+                .map(|e| e.to_client_event().into_json())
                 .collect();
             invite_map.insert(
                 room_id.clone(),
@@ -275,36 +510,41 @@ async fn sync(
             for room_id in &left_rooms {
                 // Get leave position
                 let leave_pos = storage
-                    .get_state_event(room_id, "m.room.member", &user_id)
+                    .get_state_event(room_id, et::MEMBER, &user_id)
                     .await
                     .ok()
                     .map(|e| e.stream_position)
                     .unwrap_or(new_position);
 
-                // Get events between since and leave_pos
+                // Only include rooms where the leave happened after `since`
+                if leave_pos <= since {
+                    continue;
+                }
+
+                // For incremental sync, include the leave membership event
                 let mut timeline_events = Vec::new();
-                if let Ok(events) = storage.get_room_events(room_id, since, 50, "f").await {
-                    for event in events {
-                        if event.stream_position <= leave_pos {
-                            if let Some(ref types) = timeline_types
-                                && !types.contains(&event.event_type)
-                            {
-                                continue;
-                            }
-                            timeline_events.push(event.to_client_event());
-                        }
-                    }
+                if let Ok(member_event) =
+                    storage.get_state_event(room_id, et::MEMBER, &user_id).await
+                {
+                    timeline_events.push(member_event.to_client_event().into_json());
                 }
 
                 leave_map.insert(room_id.clone(), serde_json::json!({
                     "state": { "events": [] },
-                    "timeline": { "events": timeline_events, "prev_batch": new_position.to_string(), "limited": false },
+                    "timeline": { "events": timeline_events, "prev_batch": since.to_string(), "limited": false },
                 }));
             }
         }
 
         // Compute device_lists.changed — users in shared rooms with new events
         let device_lists = compute_device_lists(storage, &joined_rooms, &user_id, since).await;
+
+        // Build global account_data for response
+        let global_account_data = build_global_account_data(storage, &user_id, false).await;
+
+        // Build presence events
+        let presence =
+            build_presence_events(storage, state.ephemeral(), &joined_rooms, &user_id).await;
 
         return Ok(Json(SyncResponse {
             next_batch: new_position.to_string(),
@@ -317,24 +557,56 @@ async fn sync(
                 events: to_device_events,
             }),
             device_lists: Some(device_lists),
+            account_data: global_account_data,
+            presence,
         }));
     }
 
     // Ephemeral events already added above (before long-poll check)
 
     // Build invite section — rooms where user has pending invites
+    // Filter out invites from ignored users
+    let ignored_users: std::collections::HashSet<String> = storage
+        .get_account_data(&user_id, None, "m.ignored_user_list")
+        .await
+        .ok()
+        .and_then(|v| {
+            v.get("ignored_users")
+                .and_then(|u| u.as_object())
+                .map(|obj| obj.keys().cloned().collect())
+        })
+        .unwrap_or_default();
+
     let mut invite_map: HashMap<String, serde_json::Value> = HashMap::new();
     for room_id in &invited_rooms {
         let state = storage.get_current_state(room_id).await.unwrap_or_default();
+
+        // Check if the invite was from an ignored user
+        let inviter = state
+            .iter()
+            .find(|e| {
+                e.event_type == et::MEMBER
+                    && e.state_key.as_deref() == Some(&user_id)
+                    && e.content.get("membership").and_then(|m| m.as_str())
+                        == Some(Membership::Invite.as_str())
+            })
+            .map(|e| e.sender.clone());
+
+        if let Some(ref sender) = inviter
+            && ignored_users.contains(sender)
+        {
+            continue; // Skip invites from ignored users
+        }
+
         let invite_state: Vec<serde_json::Value> = state
             .iter()
             .filter(|e| {
-                e.event_type == "m.room.create"
-                    || e.event_type == "m.room.join_rules"
-                    || e.event_type == "m.room.name"
-                    || (e.event_type == "m.room.member" && e.state_key.as_deref() == Some(&user_id))
+                e.event_type == et::CREATE
+                    || e.event_type == et::JOIN_RULES
+                    || e.event_type == et::NAME
+                    || (e.event_type == et::MEMBER && e.state_key.as_deref() == Some(&user_id))
             })
-            .map(|e| e.to_client_event())
+            .map(|e| e.to_client_event().into_json())
             .collect();
 
         invite_map.insert(
@@ -347,9 +619,23 @@ async fn sync(
     let mut leave_map: HashMap<String, serde_json::Value> = HashMap::new();
     if include_leave || sync_filter.is_none() {
         for room_id in &left_rooms {
+            // For incremental sync, only include rooms where the leave happened after `since`
+            if !is_initial {
+                let leave_pos = storage
+                    .get_state_event(room_id, et::MEMBER, &user_id)
+                    .await
+                    .ok()
+                    .map(|e| e.stream_position)
+                    .unwrap_or(0);
+
+                if leave_pos <= since {
+                    continue; // Left before the since token — skip
+                }
+            }
+
             // Check history visibility
             let history_vis = storage
-                .get_state_event(room_id, "m.room.history_visibility", "")
+                .get_state_event(room_id, et::HISTORY_VISIBILITY, "")
                 .await
                 .ok()
                 .and_then(|e| {
@@ -358,13 +644,15 @@ async fn sync(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                 })
-                .unwrap_or_else(|| "shared".to_string());
+                .unwrap_or_else(|| HistoryVisibility::Shared.as_str().to_string());
 
-            let can_see_history = history_vis == "world_readable" || history_vis == "shared";
+            let can_see_history = HistoryVisibility::parse(&history_vis)
+                .map(|h| h.visible_to_departed())
+                .unwrap_or(false);
 
             // Get the user's leave event to determine the departure point
             let leave_pos = storage
-                .get_state_event(room_id, "m.room.member", &user_id)
+                .get_state_event(room_id, et::MEMBER, &user_id)
                 .await
                 .ok()
                 .map(|e| e.stream_position)
@@ -391,7 +679,7 @@ async fn sync(
                                 {
                                     continue;
                                 }
-                                timeline_events.push(event.to_client_event());
+                                timeline_events.push(event.to_client_event().into_json());
                                 if timeline_events.len() >= effective_timeline_limit {
                                     break;
                                 }
@@ -400,11 +688,10 @@ async fn sync(
                     }
                 } else {
                     // For incremental sync, include the leave membership event
-                    if let Ok(member_event) = storage
-                        .get_state_event(room_id, "m.room.member", &user_id)
-                        .await
+                    if let Ok(member_event) =
+                        storage.get_state_event(room_id, et::MEMBER, &user_id).await
                     {
-                        timeline_events.push(member_event.to_client_event());
+                        timeline_events.push(member_event.to_client_event().into_json());
                     }
                 }
             }
@@ -415,11 +702,10 @@ async fn sync(
             // If timeline_limit is 0, put relevant events in state section instead
             if effective_timeline_limit == 0 {
                 // Include user's leave event and relevant state in state section
-                if let Ok(member_event) = storage
-                    .get_state_event(room_id, "m.room.member", &user_id)
-                    .await
+                if let Ok(member_event) =
+                    storage.get_state_event(room_id, et::MEMBER, &user_id).await
                 {
-                    state_events.push(member_event.to_client_event());
+                    state_events.push(member_event.to_client_event().into_json());
                 }
                 // Include state events from before the user left
                 if let Ok(events) = storage
@@ -429,7 +715,7 @@ async fn sync(
                     for event in events {
                         if event.stream_position <= leave_pos
                             && event.is_state()
-                            && event.event_type != "m.room.member"
+                            && event.event_type != et::MEMBER
                         {
                             // Apply state type filter if specified
                             if let Some(ref types) = state_types
@@ -437,7 +723,7 @@ async fn sync(
                             {
                                 continue;
                             }
-                            state_events.push(event.to_client_event());
+                            state_events.push(event.to_client_event().into_json());
                         }
                     }
                 }
@@ -460,6 +746,12 @@ async fn sync(
         None
     };
 
+    // Build global account_data for response
+    let global_account_data = build_global_account_data(storage, &user_id, is_initial).await;
+
+    // Build presence events
+    let presence = build_presence_events(storage, state.ephemeral(), &joined_rooms, &user_id).await;
+
     Ok(Json(SyncResponse {
         next_batch: current_position.to_string(),
         rooms: RoomsResponse {
@@ -471,6 +763,8 @@ async fn sync(
             events: to_device_events,
         }),
         device_lists,
+        account_data: global_account_data,
+        presence,
     }))
 }
 
@@ -478,6 +772,8 @@ async fn build_initial_sync(
     storage: &dyn maelstrom_storage::traits::Storage,
     joined_rooms: &[String],
     current_position: i64,
+    user_id: &str,
+    lazy_load_members: bool,
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
     let mut join_map: HashMap<String, JoinedRoomResponse> = HashMap::new();
 
@@ -502,14 +798,64 @@ async fn build_initial_sync(
             .map(|e| e.stream_position.to_string())
             .unwrap_or_else(|| "0".to_string());
 
-        let state_client: Vec<serde_json::Value> = state_events
-            .into_iter()
-            .map(|e| e.to_client_event())
-            .collect();
         let timeline_client: Vec<serde_json::Value> = timeline_events
-            .into_iter()
-            .map(|e| e.to_client_event())
+            .iter()
+            .map(|e| e.to_client_event().into_json())
             .collect();
+
+        let state_client: Vec<serde_json::Value> = if lazy_load_members {
+            // Only include m.room.member for senders that appear in the timeline
+            let timeline_senders: HashSet<String> =
+                timeline_events.iter().map(|e| e.sender.clone()).collect();
+            state_events
+                .into_iter()
+                .filter(|e| {
+                    e.event_type != et::MEMBER
+                        || e.state_key
+                            .as_ref()
+                            .is_some_and(|sk| timeline_senders.contains(sk))
+                })
+                .map(|e| e.to_client_event().into_json())
+                .collect()
+        } else {
+            state_events
+                .into_iter()
+                .map(|e| e.to_client_event().into_json())
+                .collect()
+        };
+
+        // Fetch per-room account data
+        let room_account_data = storage
+            .get_all_room_account_data(user_id, room_id)
+            .await
+            .unwrap_or_default();
+        let room_ad = if room_account_data.is_empty() {
+            None
+        } else {
+            Some(AccountDataResponse {
+                events: room_account_data
+                    .into_iter()
+                    .map(
+                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
+                    )
+                    .collect(),
+            })
+        };
+
+        // Room summary: member counts
+        let joined_count = storage
+            .get_room_members(room_id, Membership::Join.as_str())
+            .await
+            .map(|m| m.len() as u64)
+            .unwrap_or(0);
+        let invited_count = storage
+            .get_room_members(room_id, Membership::Invite.as_str())
+            .await
+            .map(|m| m.len() as u64)
+            .unwrap_or(0);
+
+        let state_client = annotate_membership(state_client, Membership::Join.as_str());
+        let timeline_client = annotate_membership(timeline_client, Membership::Join.as_str());
 
         join_map.insert(
             room_id.clone(),
@@ -527,6 +873,11 @@ async fn build_initial_sync(
                     highlight_count: 0,
                     notification_count: 0,
                 },
+                account_data: room_ad,
+                summary: Some(RoomSummary {
+                    joined_member_count: joined_count,
+                    invited_member_count: invited_count,
+                }),
             },
         );
     }
@@ -539,6 +890,7 @@ async fn build_incremental_sync(
     joined_rooms: &[String],
     since: i64,
     user_id: &str,
+    timeline_limit: Option<usize>,
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
     let new_events = storage
         .get_events_since(since)
@@ -553,13 +905,14 @@ async fn build_incremental_sync(
     // NOT already joined at the since position (i.e. profile-only updates don't count).
     let mut newly_joined: HashSet<String> = HashSet::new();
     for event in &new_events {
-        if event.event_type == "m.room.member"
+        if event.event_type == et::MEMBER
             && event.state_key.as_deref() == Some(user_id)
-            && event.content.get("membership").and_then(|m| m.as_str()) == Some("join")
+            && event.content.get("membership").and_then(|m| m.as_str())
+                == Some(Membership::Join.as_str())
         {
             // Check if the user was already joined at the since position
             let was_joined = storage
-                .get_state_event_at(&event.room_id, "m.room.member", user_id, since)
+                .get_state_event_at(&event.room_id, et::MEMBER, user_id, since)
                 .await
                 .ok()
                 .and_then(|e| {
@@ -568,7 +921,7 @@ async fn build_incremental_sync(
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string())
                 })
-                == Some("join".to_string());
+                == Some(Membership::Join.as_str().to_string());
 
             if !was_joined {
                 newly_joined.insert(event.room_id.clone());
@@ -582,7 +935,7 @@ async fn build_incremental_sync(
     for event in new_events {
         if joined_set.contains(event.room_id.as_str()) {
             let is_newly_joined = newly_joined.contains(&event.room_id);
-            let client_event = event.to_client_event();
+            let client_event = event.to_client_event().into_json();
 
             if event.is_state() {
                 room_state
@@ -615,16 +968,73 @@ async fn build_incremental_sync(
         let state_events = if is_newly_joined {
             // For newly joined rooms, include full current state
             let current_state = storage.get_current_state(room_id).await.unwrap_or_default();
-            current_state.iter().map(|e| e.to_client_event()).collect()
+            current_state
+                .iter()
+                .map(|e| e.to_client_event().into_json())
+                .collect()
         } else {
             room_state.remove(room_id).unwrap_or_default()
         };
 
-        let timeline_events = room_timeline.remove(room_id).unwrap_or_default();
+        let mut timeline_events = room_timeline.remove(room_id).unwrap_or_default();
+
+        // Apply timeline limit and set limited/prev_batch for gaps
+        let effective_limit = timeline_limit.unwrap_or(20);
+        let limited = is_newly_joined || timeline_events.len() > effective_limit;
+        if timeline_events.len() > effective_limit {
+            // Keep only the most recent events (last N)
+            timeline_events = timeline_events.split_off(timeline_events.len() - effective_limit);
+        }
 
         if state_events.is_empty() && timeline_events.is_empty() {
             continue;
         }
+
+        // Room summary for incremental sync (include when there are membership changes)
+        let has_membership_change = timeline_events
+            .iter()
+            .any(|e| e.get("type").and_then(|t| t.as_str()) == Some(et::MEMBER))
+            || state_events
+                .iter()
+                .any(|e| e.get("type").and_then(|t| t.as_str()) == Some(et::MEMBER));
+
+        let summary = if is_newly_joined || has_membership_change {
+            let joined_count = storage
+                .get_room_members(room_id, Membership::Join.as_str())
+                .await
+                .map(|m| m.len() as u64)
+                .unwrap_or(0);
+            let invited_count = storage
+                .get_room_members(room_id, Membership::Invite.as_str())
+                .await
+                .map(|m| m.len() as u64)
+                .unwrap_or(0);
+            Some(RoomSummary {
+                joined_member_count: joined_count,
+                invited_member_count: invited_count,
+            })
+        } else {
+            None
+        };
+
+        // prev_batch: when limited, use the stream_position of the first timeline event
+        let prev_batch = if limited {
+            timeline_events
+                .first()
+                .and_then(|e| e.get("origin_server_ts")) // Use first event as anchor
+                .map(|_| {
+                    // Get the stream_position from the first timeline event
+                    // We need to use the event's position, stored before to_client_event conversion
+                    since.to_string() // Fallback: use since token
+                })
+                .unwrap_or_else(|| since.to_string())
+        } else {
+            since.to_string()
+        };
+
+        // Add unsigned.membership per spec — for joined rooms it's always "join"
+        let state_events = annotate_membership(state_events, Membership::Join.as_str());
+        let timeline_events = annotate_membership(timeline_events, Membership::Join.as_str());
 
         join_map.insert(
             room_id.clone(),
@@ -634,14 +1044,16 @@ async fn build_incremental_sync(
                 },
                 timeline: TimelineResponse {
                     events: timeline_events,
-                    prev_batch: since.to_string(),
-                    limited: is_newly_joined,
+                    prev_batch,
+                    limited,
                 },
                 ephemeral: EphemeralResponse { events: vec![] },
                 unread_notifications: UnreadNotifications {
                     highlight_count: 0,
                     notification_count: 0,
                 },
+                account_data: None,
+                summary,
             },
         );
     }
@@ -649,14 +1061,32 @@ async fn build_incremental_sync(
     Ok(join_map)
 }
 
+/// Add `unsigned.membership` to a list of client events.
+fn annotate_membership(events: Vec<serde_json::Value>, membership: &str) -> Vec<serde_json::Value> {
+    events
+        .into_iter()
+        .map(|mut e| {
+            if let Some(obj) = e.as_object_mut() {
+                let unsigned = obj
+                    .entry("unsigned")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(u) = unsigned.as_object_mut() {
+                    u.insert("membership".to_string(), serde_json::json!(membership));
+                }
+            }
+            e
+        })
+        .collect()
+}
+
 async fn build_incremental_sync_with_ephemeral(
     storage: &dyn maelstrom_storage::traits::Storage,
-    ephemeral: &maelstrom_core::ephemeral::EphemeralStore,
+    ephemeral: &maelstrom_core::matrix::ephemeral::EphemeralStore,
     joined_rooms: &[String],
     since: i64,
     user_id: &str,
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
-    let join_map = build_incremental_sync(storage, joined_rooms, since, user_id).await?;
+    let join_map = build_incremental_sync(storage, joined_rooms, since, user_id, None).await?;
     add_ephemeral_events(storage, ephemeral, join_map, joined_rooms).await
 }
 
@@ -672,7 +1102,10 @@ async fn compute_device_lists(
     // Get all users in shared rooms and check for device changes
     let mut room_users: std::collections::HashSet<String> = std::collections::HashSet::new();
     for room_id in joined_rooms {
-        if let Ok(members) = storage.get_room_members(room_id, "join").await {
+        if let Ok(members) = storage
+            .get_room_members(room_id, Membership::Join.as_str())
+            .await
+        {
             for member in members {
                 if member != my_user_id {
                     room_users.insert(member);
@@ -687,37 +1120,61 @@ async fn compute_device_lists(
             .get_account_data(user_id, None, "_maelstrom.device_change_pos")
             .await
             && let Some(pos) = data.get("pos").and_then(|p| p.as_i64())
-            && pos > since
+            && pos >= since
         {
             changed.insert(user_id.clone());
         }
     }
 
-    // Also check new member join events since last sync
+    // Also check new member join/leave events since last sync.
+    // When a user joins a shared room, they should appear in device_lists.changed.
+    // When a user leaves all shared rooms, they should appear in device_lists.left.
+    let mut left_candidates: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     if let Ok(new_events) = storage.get_events_since(since).await {
         let joined_set: std::collections::HashSet<&str> =
             joined_rooms.iter().map(|s| s.as_str()).collect();
         for event in &new_events {
-            if event.event_type == "m.room.member"
-                && joined_set.contains(event.room_id.as_str())
-                && event.sender != my_user_id
-                && let Some(membership) = event.content.get("membership").and_then(|m| m.as_str())
-                && membership == "join"
-            {
-                changed.insert(event.sender.clone());
+            if event.event_type == et::MEMBER && joined_set.contains(event.room_id.as_str()) {
+                // Use state_key as the target user (not sender, which may differ for invites)
+                let target_user = event.state_key.as_deref().unwrap_or(&event.sender);
+
+                if target_user == my_user_id {
+                    continue;
+                }
+
+                if let Some(membership) = event.content.get("membership").and_then(|m| m.as_str()) {
+                    match membership {
+                        m if m == Membership::Join.as_str() => {
+                            changed.insert(target_user.to_string());
+                        }
+                        m if m == Membership::Leave.as_str() || m == Membership::Ban.as_str() => {
+                            left_candidates.insert(target_user.to_string());
+                        }
+                        _ => {}
+                    }
+                }
             }
+        }
+    }
+
+    // Users who left are only in device_lists.left if they share NO remaining rooms
+    let mut left: Vec<String> = Vec::new();
+    for user_id in left_candidates {
+        if !room_users.contains(&user_id) {
+            left.push(user_id);
         }
     }
 
     DeviceLists {
         changed: changed.into_iter().collect(),
-        left: vec![],
+        left,
     }
 }
 
 async fn add_ephemeral_events(
     storage: &dyn maelstrom_storage::traits::Storage,
-    ephemeral: &maelstrom_core::ephemeral::EphemeralStore,
+    ephemeral: &maelstrom_core::matrix::ephemeral::EphemeralStore,
     mut join_map: HashMap<String, JoinedRoomResponse>,
     joined_rooms: &[String],
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
@@ -725,15 +1182,13 @@ async fn add_ephemeral_events(
         // Build ephemeral events for this room
         let mut ephemeral_events: Vec<serde_json::Value> = Vec::new();
 
-        // Typing indicators
+        // Always include typing indicators — even an empty user_ids list is
+        // meaningful (it tells the client that typing has stopped).
         let typing_users = ephemeral.get_typing_users(room_id);
-
-        // Always include typing event (even with empty user_ids)
-        // so clients can detect when typing has stopped
         ephemeral_events.push(serde_json::json!({
             "type": "m.typing",
             "content": {
-                "user_ids": typing_users,
+                "user_ids": typing_users
             }
         }));
 
@@ -748,15 +1203,16 @@ async fn add_ephemeral_events(
                 HashMap::new();
 
             for receipt in &receipts {
+                let mut receipt_data = serde_json::json!({ "ts": receipt.ts });
+                if let Some(ref tid) = receipt.thread_id {
+                    receipt_data["thread_id"] = serde_json::Value::String(tid.clone());
+                }
                 content
                     .entry(receipt.event_id.clone())
                     .or_default()
                     .entry(receipt.receipt_type.clone())
                     .or_default()
-                    .insert(
-                        receipt.user_id.clone(),
-                        serde_json::json!({ "ts": receipt.ts }),
-                    );
+                    .insert(receipt.user_id.clone(), receipt_data);
             }
 
             ephemeral_events.push(serde_json::json!({
@@ -765,25 +1221,44 @@ async fn add_ephemeral_events(
             }));
         }
 
-        if !ephemeral_events.is_empty() {
-            // Get or create room entry
-            let room_response =
-                join_map
-                    .entry(room_id.clone())
-                    .or_insert_with(|| JoinedRoomResponse {
-                        state: StateResponse { events: vec![] },
-                        timeline: TimelineResponse {
-                            events: vec![],
-                            prev_batch: "0".to_string(),
-                            limited: false,
-                        },
-                        ephemeral: EphemeralResponse { events: vec![] },
-                        unread_notifications: UnreadNotifications {
-                            highlight_count: 0,
-                            notification_count: 0,
-                        },
-                    });
+        // Determine whether there's something worth reporting beyond empty typing.
+        let has_active_ephemeral =
+            ephemeral_events
+                .iter()
+                .any(|e| match e.get("type").and_then(|t| t.as_str()) {
+                    Some("m.typing") => e
+                        .get("content")
+                        .and_then(|c| c.get("user_ids"))
+                        .and_then(|u| u.as_array())
+                        .is_some_and(|a| !a.is_empty()),
+                    _ => true,
+                });
+
+        if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
+            // Room already in response — always attach ephemeral events.
             room_response.ephemeral.events = ephemeral_events;
+        } else if has_active_ephemeral {
+            // New room entry only for active typing or receipts.
+            join_map.insert(
+                room_id.clone(),
+                JoinedRoomResponse {
+                    state: StateResponse { events: vec![] },
+                    timeline: TimelineResponse {
+                        events: vec![],
+                        prev_batch: "0".to_string(),
+                        limited: false,
+                    },
+                    ephemeral: EphemeralResponse {
+                        events: ephemeral_events,
+                    },
+                    unread_notifications: UnreadNotifications {
+                        highlight_count: 0,
+                        notification_count: 0,
+                    },
+                    account_data: None,
+                    summary: None,
+                },
+            );
         }
     }
 
@@ -900,6 +1375,203 @@ struct SlidingSyncExtensionsResponse {
     typing: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipts: Option<serde_json::Value>,
+}
+
+/// Build top-level presence events for users in shared rooms.
+async fn build_presence_events(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    ephemeral: &maelstrom_core::matrix::ephemeral::EphemeralStore,
+    joined_rooms: &[String],
+    user_id: &str,
+) -> Option<PresenceResponse> {
+    let mut seen_users = HashSet::new();
+    let mut events = Vec::new();
+
+    for room_id in joined_rooms {
+        if let Ok(members) = storage
+            .get_room_members(room_id, Membership::Join.as_str())
+            .await
+        {
+            for member in members {
+                if member == user_id || !seen_users.insert(member.clone()) {
+                    continue;
+                }
+                if let Some(presence) = ephemeral.get_presence(&member) {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let last_active_ago = now_ms.saturating_sub(presence.last_active_ts);
+
+                    let mut content = serde_json::json!({
+                        "presence": presence.status,
+                        "last_active_ago": last_active_ago,
+                    });
+                    if let Some(msg) = &presence.status_msg {
+                        content["status_msg"] = serde_json::Value::String(msg.clone());
+                    }
+
+                    events.push(serde_json::json!({
+                        "type": "m.presence",
+                        "sender": member,
+                        "content": content,
+                    }));
+                }
+            }
+        }
+    }
+
+    // Also include the user's own presence
+    if let Some(presence) = ephemeral.get_presence(user_id) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let last_active_ago = now_ms.saturating_sub(presence.last_active_ts);
+
+        let mut content = serde_json::json!({
+            "presence": presence.status,
+            "last_active_ago": last_active_ago,
+        });
+        if let Some(msg) = &presence.status_msg {
+            content["status_msg"] = serde_json::Value::String(msg.clone());
+        }
+
+        events.push(serde_json::json!({
+            "type": "m.presence",
+            "sender": user_id,
+            "content": content,
+        }));
+    }
+
+    if events.is_empty() {
+        None
+    } else {
+        Some(PresenceResponse { events })
+    }
+}
+
+/// Build global account_data for inclusion in sync response.
+/// On initial sync, always includes push rules and all user account data.
+/// On incremental sync, includes account data if any exists (since we don't
+/// track per-item change timestamps yet).
+async fn build_global_account_data(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    user_id: &str,
+    is_initial: bool,
+) -> Option<AccountDataResponse> {
+    let mut events = Vec::new();
+
+    // Build push rules: merge default rules with user customizations
+    let user_rules = storage
+        .get_account_data(user_id, None, "_maelstrom.push_rules")
+        .await
+        .ok()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let has_custom_rules = user_rules
+        .as_object()
+        .map(|o| !o.is_empty())
+        .unwrap_or(false);
+
+    // Include push rules on initial sync or when user has custom rules
+    if is_initial || has_custom_rules {
+        // Start with defaults, merge user overrides
+        let mut global = serde_json::json!({
+            "override": [
+                {
+                    "rule_id": ".m.rule.master",
+                    "default": true,
+                    "enabled": false,
+                    "conditions": [],
+                    "actions": ["dont_notify"]
+                },
+                {
+                    "rule_id": ".m.rule.suppress_notices",
+                    "default": true,
+                    "enabled": true,
+                    "conditions": [
+                        {"kind": "event_match", "key": "content.msgtype", "pattern": "m.notice"}
+                    ],
+                    "actions": ["dont_notify"]
+                }
+            ],
+            "content": [
+                {
+                    "rule_id": ".m.rule.contains_user_name",
+                    "default": true,
+                    "enabled": true,
+                    "conditions": [],
+                    "actions": ["notify", {"set_tweak": "sound", "value": "default"}, {"set_tweak": "highlight"}],
+                    "pattern": user_id.split(':').next().unwrap_or(user_id).trim_start_matches('@')
+                }
+            ],
+            "underride": [
+                {
+                    "rule_id": ".m.rule.message",
+                    "default": true,
+                    "enabled": true,
+                    "conditions": [
+                        {"kind": "event_match", "key": "type", "pattern": "m.room.message"}
+                    ],
+                    "actions": ["notify"]
+                }
+            ],
+            "sender": [],
+            "room": []
+        });
+
+        // Merge user custom rules into defaults
+        if let Some(user_obj) = user_rules.as_object()
+            && let Some(global_obj) = global.as_object_mut()
+        {
+            for (kind, rules) in user_obj {
+                if let Some(user_arr) = rules.as_array() {
+                    let kind_arr = global_obj
+                        .entry(kind.clone())
+                        .or_insert_with(|| serde_json::json!([]))
+                        .as_array_mut();
+                    if let Some(arr) = kind_arr {
+                        for rule in user_arr {
+                            // Add user rules that don't overlap with defaults
+                            let rule_id = rule.get("rule_id").and_then(|v| v.as_str());
+                            if let Some(rid) = rule_id {
+                                // Update default rule or add new one
+                                if let Some(existing) = arr.iter_mut().find(|r| {
+                                    r.get("rule_id").and_then(|v| v.as_str()) == Some(rid)
+                                }) {
+                                    *existing = rule.clone();
+                                } else {
+                                    arr.push(rule.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        events.push(serde_json::json!({
+            "type": "m.push_rules",
+            "content": { "global": global }
+        }));
+    }
+
+    // Include all user account data
+    if let Ok(all_data) = storage.get_all_account_data(user_id).await {
+        for (data_type, content) in all_data {
+            events.push(serde_json::json!({
+                "type": data_type,
+                "content": content,
+            }));
+        }
+    }
+
+    if events.is_empty() {
+        None
+    } else {
+        Some(AccountDataResponse { events })
+    }
 }
 
 #[derive(Serialize)]
@@ -1032,7 +1704,7 @@ async fn sliding_sync(
 
         // Extract room name from state events
         let name = required_state.iter().find_map(|ev| {
-            if ev.get("type").and_then(|t| t.as_str()) == Some("m.room.name") {
+            if ev.get("type").and_then(|t| t.as_str()) == Some(et::NAME) {
                 ev.get("content")
                     .and_then(|c| c.get("name"))
                     .and_then(|n| n.as_str())
@@ -1053,16 +1725,16 @@ async fn sliding_sync(
 
         let timeline: Vec<serde_json::Value> = timeline_events
             .into_iter()
-            .map(|e| e.to_client_event())
+            .map(|e| e.to_client_event().into_json())
             .collect();
 
         // Get member counts
         let joined_members = storage
-            .get_room_members(room_id, "join")
+            .get_room_members(room_id, Membership::Join.as_str())
             .await
             .unwrap_or_default();
         let invited_members = storage
-            .get_room_members(room_id, "invite")
+            .get_room_members(room_id, Membership::Invite.as_str())
             .await
             .unwrap_or_default();
 
@@ -1130,7 +1802,10 @@ async fn fetch_required_state(
             .get_current_state(room_id)
             .await
             .map_err(crate::extractors::storage_error)?;
-        return Ok(all_state.into_iter().map(|e| e.to_client_event()).collect());
+        return Ok(all_state
+            .into_iter()
+            .map(|e| e.to_client_event().into_json())
+            .collect());
     }
 
     let mut result = Vec::new();
@@ -1153,7 +1828,7 @@ async fn fetch_required_state(
             .await
         {
             Ok(event) => {
-                result.push(event.to_client_event());
+                result.push(event.to_client_event().into_json());
                 fetched.insert(dedup_key);
             }
             Err(maelstrom_storage::traits::StorageError::NotFound) => {
@@ -1169,7 +1844,7 @@ async fn fetch_required_state(
 /// Build extension responses for typing, receipts, and to_device.
 async fn build_extensions(
     storage: &dyn maelstrom_storage::traits::Storage,
-    ephemeral: &maelstrom_core::ephemeral::EphemeralStore,
+    ephemeral: &maelstrom_core::matrix::ephemeral::EphemeralStore,
     ext: &SlidingSyncExtensions,
     joined_rooms: &[String],
     current_position: i64,

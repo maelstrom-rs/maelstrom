@@ -80,7 +80,7 @@ def categorize(name):
     if 'search' in n: return 'Search'
     if 'push' in n: return 'Push'
     if 'relation' in n or 'thread' in n: return 'Relations'
-    if 'federation' in n or 'over_federation' in n: return 'Federation'
+    if 'federation' in n or 'over_federation' in n or 'outbound' in n or 'inbound' in n or 'backfill' in n: return 'Federation'
     return 'Other'
 
 for t, a in results.items():
@@ -184,12 +184,12 @@ fi
 FILTER="${1:-}"
 
 if [ "$FILTER" = "-list" ]; then
-    echo -e "${YELLOW}Available CS API tests:${NC}"
-    go test -list '.*' ./tests/csapi/... 2>/dev/null | grep "^Test"
+    echo -e "${YELLOW}Available Complement tests:${NC}"
+    go test -list '.*' ./tests/... 2>/dev/null | grep "^Test"
     exit 0
 fi
 
-echo -e "${YELLOW}Running Complement CS API tests...${NC}"
+echo -e "${YELLOW}Running Complement tests (CS API + Federation)...${NC}"
 if [ -n "$FILTER" ]; then
     echo -e "${YELLOW}Filter: $FILTER${NC}"
 fi
@@ -199,9 +199,9 @@ if [ -n "$FILTER" ]; then
     RUN_ARG="-run $FILTER"
 fi
 
-# Run tests — capture JSON output silently, show progress dots
+# Run ALL tests — CS API and federation
 set +e
-go test -json -count=1 -timeout 30m $RUN_ARG ./tests/csapi/... > "$RESULTS_FILE" 2>&1
+go test -json -count=1 -timeout 30m $RUN_ARG ./tests/... > "$RESULTS_FILE" 2>&1
 TEST_EXIT=$?
 set -e
 

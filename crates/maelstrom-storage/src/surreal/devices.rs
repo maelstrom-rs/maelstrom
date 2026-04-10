@@ -1,8 +1,17 @@
+//! Device and access token storage -- [`DeviceStore`](crate::traits::DeviceStore) implementation.
+//!
+//! Devices are stored in the `device` table with a graph edge to their owning
+//! user (`device -> belongs_to -> user`).  Access tokens are indexed for O(1)
+//! lookup on every authenticated request (`get_device_by_token`).
+//!
+//! Bulk operations (`remove_all_devices`, `remove_all_devices_except`) are used
+//! during logout-all and password-change flows.
+
 use async_trait::async_trait;
 use surrealdb::types::{Datetime, RecordId, RecordIdKey, SurrealValue};
 use tracing::debug;
 
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 
 use super::SurrealStorage;
 use crate::traits::*;

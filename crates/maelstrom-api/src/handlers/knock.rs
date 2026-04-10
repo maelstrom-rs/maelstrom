@@ -1,10 +1,36 @@
+//! Room knocking.
+//!
+//! Knocking lets a user request access to a room they cannot join directly.
+//! The flow is:
+//!
+//! 1. The user **knocks** on the room (this endpoint). A membership event with
+//!    `membership: knock` is inserted into the room state.
+//! 2. An existing member with sufficient power level sees the knock and decides
+//!    to **invite** the user.
+//! 3. The user **joins** the room using the invite.
+//!
+//! Knocking is only allowed when the room's join rules include `knock` (or
+//! `knock_restricted`). If the user is already a member, banned, or the join
+//! rules do not permit knocking, the request is rejected.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `POST` | `/_matrix/client/v3/knock/{roomIdOrAlias}` | Knock on a room to request an invite |
+//!
+//! # Matrix spec
+//!
+//! * [Knocking on rooms](https://spec.matrix.org/v1.12/client-server-api/#knocking-on-rooms)
+
 use axum::extract::{Path, State};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::events::pdu::{StoredEvent, generate_event_id, timestamp_ms};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::event::{Pdu, generate_event_id, timestamp_ms};
+use maelstrom_core::matrix::room::{JoinRule, Membership, event_type as et};
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
@@ -52,7 +78,7 @@ async fn knock_room(
 
     // Check join rules — knocking is only valid for rooms with join_rule "knock" or "knock_restricted"
     let join_rule = storage
-        .get_state_event(&room_id, "m.room.join_rules", "")
+        .get_state_event(&room_id, et::JOIN_RULES, "")
         .await
         .ok()
         .and_then(|e| {
@@ -61,9 +87,9 @@ async fn knock_room(
                 .and_then(|j| j.as_str())
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| "invite".to_string());
+        .unwrap_or_else(|| JoinRule::Invite.as_str().to_string());
 
-    if join_rule != "knock" && join_rule != "knock_restricted" {
+    if join_rule != JoinRule::Knock.as_str() && join_rule != JoinRule::KnockRestricted.as_str() {
         return Err(MatrixError::forbidden(
             "Room does not accept knocks (join_rule must be 'knock' or 'knock_restricted')",
         ));
@@ -72,9 +98,13 @@ async fn knock_room(
     // Check if already a member
     if let Ok(membership) = storage.get_membership(&sender, &room_id).await {
         match membership.as_str() {
-            "join" => return Err(MatrixError::forbidden("Already a member of this room")),
-            "ban" => return Err(MatrixError::forbidden("You are banned from this room")),
-            "knock" => {
+            m if m == Membership::Join.as_str() => {
+                return Err(MatrixError::forbidden("Already a member of this room"));
+            }
+            m if m == Membership::Ban.as_str() => {
+                return Err(MatrixError::forbidden("You are banned from this room"));
+            }
+            m if m == Membership::Knock.as_str() => {
                 // Already knocked — return success
                 return Ok(Json(serde_json::json!({ "room_id": room_id })));
             }
@@ -83,7 +113,7 @@ async fn knock_room(
     }
 
     // Create m.room.member event with membership: "knock"
-    let mut content = serde_json::json!({ "membership": "knock" });
+    let mut content = serde_json::json!({ "membership": Membership::Knock.as_str() });
     if let Some(reason) = &body.reason {
         content["reason"] = serde_json::json!(reason);
     }
@@ -94,11 +124,11 @@ async fn knock_room(
         .await
         .map_err(crate::extractors::storage_error)?;
 
-    let event = StoredEvent {
+    let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.clone(),
         sender: sender.clone(),
-        event_type: "m.room.member".to_string(),
+        event_type: et::MEMBER.to_string(),
         state_key: Some(sender.clone()),
         content,
         origin_server_ts: timestamp_ms(),
@@ -118,12 +148,12 @@ async fn knock_room(
         .map_err(crate::extractors::storage_error)?;
 
     storage
-        .set_room_state(&room_id, "m.room.member", &sender, &event_id)
+        .set_room_state(&room_id, et::MEMBER, &sender, &event_id)
         .await
         .map_err(crate::extractors::storage_error)?;
 
     storage
-        .set_membership(&sender, &room_id, "knock")
+        .set_membership(&sender, &room_id, Membership::Knock.as_str())
         .await
         .map_err(crate::extractors::storage_error)?;
 

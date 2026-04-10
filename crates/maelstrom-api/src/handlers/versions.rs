@@ -1,3 +1,22 @@
+//! Supported Matrix spec versions.
+//!
+//! This is typically the first endpoint a client calls during startup to
+//! determine which specification versions and unstable features the server
+//! supports. The response guides the client on which API paths and behaviours
+//! are available.
+//!
+//! This endpoint does **not** require authentication.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `GET` | `/_matrix/client/versions` | List supported spec versions and unstable feature flags |
+//!
+//! # Matrix spec
+//!
+//! * [GET /_matrix/client/versions](https://spec.matrix.org/v1.12/client-server-api/#get_matrixclientversions)
+
 use axum::Json;
 use axum::Router;
 use axum::response::IntoResponse;

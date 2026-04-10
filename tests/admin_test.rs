@@ -1,6 +1,6 @@
 use axum::body::Body;
 use http::{Request, StatusCode};
-use maelstrom_core::identifiers::ServerName;
+use maelstrom_core::matrix::id::ServerName;
 use maelstrom_storage::mock::MockStorage;
 use maelstrom_storage::traits::{DeviceRecord, DeviceStore, UserRecord, UserStore};
 use tower::ServiceExt;

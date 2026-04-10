@@ -1,9 +1,36 @@
+//! User presence.
+//!
+//! Presence tracks whether a user is currently active and available. Each user
+//! has a presence state that is one of:
+//!
+//! * `online` -- the user is actively using a client right now.
+//! * `unavailable` -- the user has been idle for a period of time.
+//! * `offline` -- the user is not connected or has explicitly set offline.
+//!
+//! The server also tracks `last_active_ago` (milliseconds since the user was
+//! last active) and an optional `status_msg` (a free-form human-readable
+//! string like "In a meeting").
+//!
+//! Presence is ephemeral and held in memory; it is delivered to other users via
+//! the `presence` section of `/sync`.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `GET` | `/_matrix/client/v3/presence/{userId}/status` | Get the presence state for a user |
+//! | `PUT` | `/_matrix/client/v3/presence/{userId}/status` | Set the calling user's presence state |
+//!
+//! # Matrix spec
+//!
+//! * [Presence](https://spec.matrix.org/v1.12/client-server-api/#presence)
+
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::notify::Notification;

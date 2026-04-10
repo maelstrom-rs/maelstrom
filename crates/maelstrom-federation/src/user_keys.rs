@@ -1,13 +1,50 @@
+//! # Cross-Server Device Key Queries
+//!
+//! End-to-end encryption (E2EE) in Matrix requires that clients know the device keys
+//! of every user they share an encrypted room with. When those users are on a remote
+//! server, the local server must query the remote server for their device keys.
+//!
+//! ## How It Works
+//!
+//! `POST /_matrix/federation/v1/user/keys/query` accepts a request with a
+//! `device_keys` object mapping user IDs to lists of requested device IDs.
+//! For example:
+//!
+//! ```json
+//! {
+//!   "device_keys": {
+//!     "@alice:example.com": [],
+//!     "@bob:example.com": ["DEVICEID1"]
+//!   }
+//! }
+//! ```
+//!
+//! An empty array means "return keys for all devices." The server only returns
+//! keys for users that actually belong to it (matching the server name in the
+//! user ID).
+//!
+//! ## Response
+//!
+//! The response includes three sections:
+//!
+//! - `device_keys` -- per-device Curve25519 and Ed25519 keys, plus any signed keys
+//! - `master_keys` -- cross-signing master keys (used to verify the user's identity)
+//! - `self_signing_keys` -- cross-signing self-signing keys (used to sign device keys)
+//!
+//! These keys are essential for clients to establish Olm/Megolm sessions and verify
+//! device trust.
+
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::debug;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::FederationState;
 
+/// Build the user keys sub-router with the device key query endpoint.
 pub fn routes() -> Router<FederationState> {
     Router::new().route(
         "/_matrix/federation/v1/user/keys/query",
@@ -15,8 +52,13 @@ pub fn routes() -> Router<FederationState> {
     )
 }
 
+/// Request body for the federation device key query.
+///
+/// The `device_keys` field maps user IDs to lists of requested device IDs.
+/// An empty list means "return all devices for this user."
 #[derive(Deserialize)]
 struct KeysQueryRequest {
+    /// Map of user ID to list of device IDs. Empty list = all devices.
     device_keys: serde_json::Value,
 }
 

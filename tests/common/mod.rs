@@ -8,8 +8,8 @@ use http::Request;
 use maelstrom_api::notify::LocalNotifier;
 use maelstrom_api::router;
 use maelstrom_api::state::AppState;
-use maelstrom_core::ephemeral::EphemeralStore;
-use maelstrom_core::identifiers::ServerName;
+use maelstrom_core::matrix::ephemeral::EphemeralStore;
+use maelstrom_core::matrix::id::ServerName;
 use maelstrom_storage::mock::MockStorage;
 use tower::ServiceExt;
 

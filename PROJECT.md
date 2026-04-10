@@ -1,7 +1,7 @@
 # Maelstrom Project Plan
 
 > Enterprise-Grade Clustered Matrix Homeserver — Complete Rewrite
-> Last updated: 2026-04-08
+> Last updated: 2026-04-10
 
 ---
 
@@ -18,7 +18,7 @@
 | Blob Storage | RustFS | 1.0.0-alpha | S3-compatible media storage (accessed via aws-sdk-s3) |
 | S3 Client | aws-sdk-s3 | 1.x | Interface to RustFS |
 | Serialization | serde / serde_json | 1.x | Zero-copy where possible |
-| Matrix Types | ruma | latest | Matrix identifiers, event types, canonical JSON |
+| Matrix Types | maelstrom-core | — | Matrix identifiers, canonical JSON, event signing (no ruma dependency) |
 | Async Runtime | Tokio | 1.x | Async I/O |
 | Logging | tracing / tracing-subscriber | 0.1.x / 0.3.x | Structured logging + OpenTelemetry |
 | Metrics | metrics / metrics-exporter-prometheus | 0.x | Prometheus-compatible metrics |
@@ -41,24 +41,23 @@ maelstrom/
 ├── db/
 │   └── schema.surql              # SurrealDB schema (single source of truth)
 ├── crates/
-│   ├── maelstrom-core/           # Core types, Matrix events, state resolution, errors
+│   ├── maelstrom-core/           # Matrix protocol types and domain model
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── error.rs          # MatrixError, ErrorCode enum
-│   │       ├── identifiers.rs    # Re-exports and extensions on ruma identifiers
-│   │       ├── events/           # Matrix event types and canonical JSON
-│   │       │   ├── mod.rs
-│   │       │   ├── pdu.rs        # Persistent Data Unit (core event structure)
-│   │       │   ├── room.rs       # Room event types
-│   │       │   └── state.rs      # State event handling
-│   │       ├── state/            # State resolution algorithms
-│   │       │   ├── mod.rs
-│   │       │   ├── v2.rs         # State resolution v2 (room versions 2+)
-│   │       │   └── room_version.rs
-│   │       └── signatures/       # Event signing and verification
-│   │           ├── mod.rs
-│   │           └── keys.rs
+│   │       ├── lib.rs            # pub mod matrix (single module — everything is Matrix-specific)
+│   │       └── matrix/
+│   │           ├── mod.rs        # Module declarations
+│   │           ├── error.rs      # MatrixError, ErrorCode enum, IntoResponse for Axum
+│   │           ├── id.rs         # UserId, RoomId, EventId, ServerName, DeviceId, RoomAlias (validated newtypes)
+│   │           ├── event.rs      # Pdu, ClientEvent, StrippedEvent + generate_event_id/room_id, timestamp_ms
+│   │           ├── content.rs    # Typed event content: Create, Member, PowerLevels, JoinRules, etc.
+│   │           ├── room.rs       # Membership, JoinRule, HistoryVisibility, RoomVersion, PowerLevelContent, event_type constants
+│   │           ├── edu.rs        # Typed EDUs: Typing, Presence, Receipt, DeviceListUpdate
+│   │           ├── json.rs       # CanonicalJson — deterministic serialization for signing
+│   │           ├── keys.rs       # Ed25519 KeyPair generation, signing, verification
+│   │           ├── signing.rs    # Event signing, hashing, verification (uses CanonicalJson + KeyPair)
+│   │           ├── state.rs      # State Resolution v2 algorithm
+│   │           └── ephemeral.rs  # EphemeralStore — in-memory typing/presence (DashMap + gossip)
 │   ├── maelstrom-storage/        # Storage abstraction + SurrealDB implementation
 │   │   ├── Cargo.toml
 │   │   └── src/
@@ -71,21 +70,22 @@ maelstrom/
 │   │       │   ├── users.rs      # User CRUD operations
 │   │       │   ├── rooms.rs      # Room CRUD, membership graph queries
 │   │       │   ├── events.rs     # Event storage, DAG traversal, timeline queries
-│   │       │   ├── state.rs      # Room state snapshots and resolution cache
-│   │       │   ├── sync.rs       # Sync token tracking, since-token queries
-│   │       │   ├── devices.rs    # Device management
-│   │       │   ├── keys.rs       # E2EE key storage
-│   │       │   └── media.rs      # Media metadata (blob refs to RustFS)
+│   │       │   ├── devices.rs    # Device and access token management
+│   │       │   ├── keys.rs       # E2EE key storage (device keys, OTKs, cross-signing)
+│   │       │   ├── media.rs      # Media metadata (blob refs to RustFS)
+│   │       │   ├── account_data.rs # Per-user and per-room account data
+│   │       │   ├── receipts.rs   # Read receipt storage
+│   │       │   ├── relations.rs  # Event relation storage (reactions, threads, edits)
+│   │       │   └── federation.rs # Remote server keys, federation destinations
 │   │       └── mock.rs           # Mock storage for unit tests
 │   ├── maelstrom-media/          # Media handling via S3 (RustFS)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── client.rs         # S3 client wrapper (aws-sdk-s3)
-│   │       ├── upload.rs         # Upload handling, content-type validation
-│   │       ├── download.rs       # Download, range requests
-│   │       ├── thumbnail.rs      # Thumbnail generation
-│   │       └── retention.rs      # Retention policy engine (used by admin tools)
+│   │       ├── preview.rs        # URL preview / Open Graph metadata extraction
+│   │       ├── thumbnail.rs      # Thumbnail generation (image crate)
+│   │       └── retention.rs      # Retention policy engine (background task)
 │   ├── maelstrom-api/            # Axum server: CS API routes and handlers
 │   │   ├── Cargo.toml
 │   │   └── src/
@@ -103,54 +103,63 @@ maelstrom/
 │   │       │   └── metrics.rs
 │   │       └── handlers/         # CS API endpoint handlers
 │   │           ├── mod.rs
+│   │           ├── util.rs       # Shared helpers: password hashing, percent encoding, membership check
 │   │           ├── auth.rs       # Login, logout, token refresh
 │   │           ├── register.rs   # Registration flows
 │   │           ├── account.rs    # Whoami, deactivate, password change
 │   │           ├── profile.rs    # Display name, avatar
-│   │           ├── rooms.rs      # Create, join, leave, invite, ban, kick
-│   │           ├── events.rs     # Send events, get events, relations
-│   │           ├── sync.rs       # /sync and sliding sync
-│   │           ├── state.rs      # Room state endpoints
-│   │           ├── directory.rs  # Room directory
-│   │           ├── typing.rs     # Typing notifications
+│   │           ├── rooms.rs      # Create, join, leave, invite, ban, kick, upgrade
+│   │           ├── events.rs     # Send events, get events, state, messages, redact
+│   │           ├── sync.rs       # /sync (long-poll) and sliding sync
+│   │           ├── directory.rs  # Room directory and aliases
+│   │           ├── typing.rs     # Typing indicators
 │   │           ├── receipts.rs   # Read receipts
-│   │           ├── presence.rs   # Presence
-│   │           ├── search.rs     # Message search
+│   │           ├── presence.rs   # User presence
+│   │           ├── search.rs     # Server-side message search
 │   │           ├── media.rs      # Upload/download proxy to maelstrom-media
 │   │           ├── keys.rs       # E2EE key upload/query/claim
-│   │           ├── to_device.rs  # To-device messaging
-│   │           ├── threads.rs    # Thread endpoints
-│   │           ├── relations.rs  # Relations (reactions, edits, etc.)
-│   │           ├── capabilities.rs # Server capabilities
+│   │           ├── to_device.rs  # Send-to-device messaging
+│   │           ├── threads.rs    # Thread listing
+│   │           ├── relations.rs  # Relations (reactions, edits, aggregations)
+│   │           ├── knock.rs      # Room knocking
+│   │           ├── spaces.rs     # Space hierarchy
+│   │           ├── reporting.rs  # Content reporting
+│   │           ├── capabilities.rs # Server capabilities and push rules
 │   │           ├── versions.rs   # /_matrix/client/versions
-│   │           └── wellknown.rs  # .well-known/matrix/client
+│   │           ├── wellknown.rs  # .well-known/matrix/client
+│   │           └── health.rs     # Health check endpoints
 │   ├── maelstrom-federation/     # Server-Server (S2S) API
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── router.rs         # Federation route tree
-│   │       ├── client.rs         # Outbound federation HTTP client
-│   │       ├── signing.rs        # Request signing (HTTP signatures)
-│   │       ├── key_server.rs     # Key server endpoints and notary
-│   │       ├── sender.rs         # Federation transaction sender (queue + retry)
+│   │       ├── client.rs         # Outbound HTTP client with discovery (DashMap cache)
+│   │       ├── signing.rs        # X-Matrix request signing
+│   │       ├── key_server.rs     # Signing key distribution endpoints
+│   │       ├── sender.rs         # Transaction sender with DashMap queues + backoff
 │   │       ├── receiver.rs       # Inbound transaction processing
-│   │       ├── backfill.rs       # Event backfill and gap filling
-│   │       ├── state.rs          # State queries over federation
-│   │       ├── joins.rs          # Remote join handling (make_join/send_join)
-│   │       └── well_known.rs     # Server discovery (.well-known/matrix/server)
-│   └── maelstrom-admin/          # Admin API and dashboard backend
+│   │       ├── backfill.rs       # Event backfill and missing events
+│   │       ├── state.rs          # Room state and state_ids endpoints
+│   │       ├── joins.rs          # make_join/send_join, make_leave/send_leave
+│   │       ├── invite.rs         # Federation invite flow
+│   │       ├── queries.rs        # Profile and directory queries
+│   │       └── user_keys.rs      # Cross-server device key queries
+│   └── maelstrom-admin/          # Admin API and SSR dashboard
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
-│           ├── router.rs         # Admin route tree
+│           ├── router.rs         # Admin route tree + static file serving
+│           ├── auth.rs           # Admin authentication (is_admin check)
+│           ├── templates.rs      # Askama HTML templates for dashboard
 │           └── handlers/
 │               ├── mod.rs
-│               ├── users.rs      # User management (list, create, suspend, lock)
-│               ├── rooms.rs      # Room management (list, shutdown, purge)
-│               ├── media.rs      # Media management (retention enforcement, cleanup)
-│               ├── federation.rs # Federation health, blocklists
-│               ├── server.rs     # Server info, config, version
-│               └── reports.rs    # Abuse reports management
+│               ├── dashboard.rs  # Dashboard overview
+│               ├── users.rs      # User management
+│               ├── rooms.rs      # Room management
+│               ├── media.rs      # Media management and quarantine
+│               ├── federation.rs # Federation status
+│               ├── server.rs     # Server info, metrics, health
+│               └── reports.rs    # Content report review
 ├── src/
 │   └── main.rs                   # Binary entry point: config loading, server startup
 └── tests/                        # Integration tests (Rust test framework)
@@ -189,6 +198,53 @@ maelstrom/
 4. **Horizontal scaling from day 1**: No singleton assumptions. Event ID generation uses content hashing (v4 format). Federation sender selection uses distributed locks via SurrealDB. No in-memory caches that assume single-instance.
 
 5. **Zero-copy and CoW where practical**: Use `bytes::Bytes` for event bodies, `serde` zero-copy deserialization for read paths, and CoW (`Cow<'_, str>`) for string-heavy Matrix types.
+
+### Type System Design
+
+Maelstrom uses a custom Matrix type system (no ruma dependency) designed for homeserver performance:
+
+**Single module: `maelstrom_core::matrix`** — everything is Matrix-specific:
+
+```
+┌──────────────────────────────────────────────┐
+│  Handlers (CS API, Federation, Admin)        │  ← uses matrix::* types
+├──────────────────────────────────────────────┤
+│  matrix::event     Pdu, ClientEvent,         │  ← domain model with
+│  matrix::content   MemberContent, PowerLevels│     signing methods
+│  matrix::room      RoomVersion, JoinRule,    │     and typed content
+│  matrix::edu       TypingEdu, PresenceEdu    │
+│  matrix::error     MatrixError, ErrorCode    │
+│  matrix::ephemeral EphemeralStore (DashMap)   │
+├──────────────────────────────────────────────┤
+│  matrix::id        UserId, RoomId, ServerName│  ← validated identifiers
+├──────────────────────────────────────────────┤
+│  matrix::json      CanonicalJson             │  ← deterministic serialization
+│  matrix::keys      Ed25519 KeyPair           │     for event signing
+│  matrix::signing   sign_event, verify, hash  │
+│  matrix::state     State Resolution v2       │
+└──────────────────────────────────────────────┘
+```
+
+**Key design decisions (inspired by ruma, tailored for a homeserver):**
+
+| Decision | Rationale |
+|----------|-----------|
+| `CanonicalJson` is protocol-agnostic | Generic deterministic JSON — no "remove signatures" knowledge |
+| `Pdu` owns signing methods | `.sign()`, `.content_hash()` know which fields to strip |
+| `Content::parse()` is lazy | Content stored as `serde_json::Value`, typed only when accessed |
+| `Content` enum has `Raw` fallback | Unknown/custom event types pass through without loss |
+| `event_type::*` are `&str` constants, not enum | Custom event types (`com.example.foo`) must work — can't enumerate all |
+| `Membership`, `JoinRule`, etc. are enums | Finite set per spec, exhaustive `match` catches missing cases |
+| `PowerLevelContent` parses once | Replaces repeated `.get("users").and_then()` chains across handlers |
+| `ClientEvent` is a separate type from `Pdu` | Different fields — no `Option` bloat on fields that are always/never present |
+| `RoomVersion` enum drives behavior | `.supports_knock()`, `.event_id_format()` etc. — no scattered string matching |
+| No borrowed/owned ID pairs (yet) | Simpler than ruma's `&UserId`/`OwnedUserId` split — defer to optimization phase |
+
+**What we deliberately don't adopt from ruma:**
+- Macro-generated endpoint types (we're always the server, not a client library)
+- Incoming/Outgoing request distinction (unnecessary for a homeserver)
+- Heavy generic hierarchies (`OriginalSyncStateEvent<C>`) — we use concrete types
+- Exhaustive event content enums for every MSC — `Content::Raw` handles unknowns
 
 ### SurrealDB Graph Schema (Conceptual)
 
@@ -497,30 +553,116 @@ Full admin API (JSON) + admin dashboard (SSR HTML). Admin auth via is_admin flag
 ### Phase 10: Complement Testing & Hardening
 > Full Complement pass, client compatibility testing, performance tuning
 
-**Goal**: 100% Complement pass rate. Validated with real clients. Performance meets targets.
+**Goal**: 100% Complement pass rate for CS API + Federation. Validated with real clients. Performance meets targets.
 
-#### Tasks
+**Baseline**: 317/536 (59%) → **Target**: 500+/536 (93%+)  
+**Federation baseline**: ~0/90 federation tests → **Target**: 70+/90
 
-- [x] **10.1** Complement-compatible Dockerfile: multi-stage build with dep caching, in-memory SurrealDB, no media dependency, HEALTHCHECK, Complement env vars (SERVER_NAME, COMPLEMENT_CA)
-- [x] **10.2** Complement CI pipeline: GitHub Actions workflow runs Complement CS API tests, uploads results artifact, generates pass rate summary
-- [x] **10.3** Media made optional: startup no longer crashes without RustFS. `[media]` config section is optional.
-- [x] **10.4** First-user-is-admin: first registered user auto-promoted. Config `admin_user` option for startup bootstrap. `set_admin`/`count_users` on UserStore.
-- [ ] **10.5** Complement hardening — baseline 92/350 (26%), target 350/350 (100%)
-  - [ ] **10.5.1** Sync fixes (~60 tests): sync responses must include room state, timeline, and ephemeral data in the correct format. Fix `MustSyncUntil` timeouts by ensuring events appear in `/sync` responses correctly.
-  - [ ] **10.5.2** Membership/invite/join fixes (~54 tests): room join returning 500/403 when should succeed. Fix join_rules checking, invite flow returning proper events, power level enforcement.
-  - [ ] **10.5.3** Missing endpoints (~37 tests): implement `GET /user/{userId}/account_data/{type}` (global account data), `POST /createRoom` with `invite_3pid`, sync filter storage (`POST /user/{userId}/filter`, `GET /user/{userId}/filter/{filterId}`), push rules API, room directory public rooms.
-  - [ ] **10.5.4** Status code fixes (~20 tests): return 413 for oversized events (not 403), 401 for unauthenticated capabilities, 400 for invalid room versions / canonical alias / device delete UIA, room forget validation.
-  - [ ] **10.5.5** Internal errors (~12 tests): fix 500s on room alias listing (power level check), createRoom with invite (membership race), media upload without media store.
-  - [ ] **10.5.6** Remaining spec compliance (~75 tests): correct room version validation, server notices, push rules in sync, search pagination, typing/receipts in sync, room upgrade, txn scoping, ignored users.
-- [ ] **10.6** Client compatibility testing: Element Web, Element X, FluffyChat, nheko
-- [ ] **10.7** Performance benchmarking: large rooms, message throughput, sync latency
-- [ ] **10.8** Horizontal scaling validation: 3+ instances, consistency checks
-- [ ] **10.9** Chaos testing: kill nodes, verify recovery
-- [ ] **10.10** Security audit: input validation, auth, rate limiting, OWASP top 10
-- [ ] **10.11** Documentation: deployment guide, config reference, architecture overview
+#### 10A — CS API Hardening (complete)
+
+- [x] **10.1** Complement-compatible Dockerfile + CI pipeline
+- [x] **10.2** Media made optional; first-user-is-admin bootstrap
+- [x] **10.3** Typing: always include m.typing in sync ephemeral (even empty user_ids for stop)
+- [x] **10.4** Account data: DELETE endpoints (MSC3391), PUT-empty-deletes, device cleanup on delete
+- [x] **10.5** Keys: UIA on device_signing/upload (MSC3967), key claim ORDER BY, backup replacement rules
+- [x] **10.6** Relations: pagination (DESC order, next_batch cursor), FilterMessagesByRelType on /messages
+- [x] **10.7** Members: /members?at= support, unsigned.membership on all client events
+- [x] **10.8** User directory: exact match for mxid searches
+- [x] **10.9** Rooms: unban-via-invite, is_direct on invite content, owned state_key validation
+- [x] **10.10** Sync: timeline gap limited flag, lazy-load members in initial sync, leave event visibility
+- [x] **10.11** Push rules: predefined server-default rules (poll, reaction, suppress_notices, etc.)
+- [x] **10.12** Threads: ordering by latest reply (GROUP BY + math::max), thread_id on receipts (MSC4102)
+- [x] **10.13** Push rule carry-over on room upgrade
+- [x] **10.14** Type system: `matrix/` module with `Pdu`, `ClientEvent`, `StrippedEvent`, typed `Content` enum, `CanonicalJson`, `RoomVersion`, `Membership`, `JoinRule`, `HistoryVisibility`, `PowerLevelContent`, `event_type` constants, typed EDUs
+- [x] **10.15** Migrate all handlers to `matrix::*` types — replaced all raw string comparisons with `Membership`, `JoinRule`, `HistoryVisibility` enums and `event_type::*` constants (~80 call sites)
+- [x] **10.16** Consolidate `maelstrom-core` — moved `error.rs`, `json.rs`, `signatures/`, `state/`, `ephemeral.rs` into `matrix/` module. `lib.rs` is now `pub mod matrix;`
+- [x] **10.17** Code quality — replaced hand-rolled percent encoding with `urlencoding` crate, replaced `std::sync::Mutex` with `DashMap` in async code (notify, federation sender/client), extracted `require_membership` helper, DRYed signing.rs, fixed `generate_event_id` to use base64 crate, made 18+ methods `const fn`, added rustdoc to ~65 files
+- [ ] **10.18** Search: back-pagination (next_batch offset), context around results (before/after events)
+- [ ] **10.19** Remaining CS API edge cases: redaction of unknown events in sync, TxnId with refresh tokens, sync filter in long-poll re-query path
+
+#### 10B — Federation Hardening ← ACTIVE SPRINT
+
+**Current state**: Federation crate is ~1700 LOC across 13 files. Core infrastructure exists (signing, key server, transactions, joins, backfill, state queries, invite, queries). Complement federation tests need to be run and failures triaged. Broken into:
+
+| Category | Tests | Root Cause |
+|----------|-------|------------|
+| PartialStateJoin | 56 | Requires partial state join protocol (MSC3706) — complex, defer |
+| InviteFiltering | 11 | Missing `send_invite` federation endpoint |
+| DeviceListUpdates | 12 | Incomplete device_list EDU propagation |
+| FederationProfile | 3 | Missing profile query federation endpoint |
+| MessagesOverFederation | 3 | Backfill needs proper DAG walking |
+| Other | 5 | Mixed: redacts, aliases, presence, is_direct over federation |
+
+**Step 1: Foundation — make federation actually work in Complement** (blocks everything else)
+- [ ] **10B.1** Fix Complement federation Docker setup: ensure two homeserver containers can reach each other, TLS certificates configured, `.well-known/matrix/server` served correctly
+- [ ] **10B.2** Fix `POST /join/{roomIdOrAlias}` for remote rooms: when alias resolves to a remote server, the CS API handler must initiate the federation join flow (make_join → sign → send_join) instead of returning 404
+- [ ] **10B.3** Verify key server responses are correct: `GET /_matrix/key/v2/server` must return properly signed JSON with valid `verify_keys`, `valid_until_ts`, and `old_verify_keys`
+- [ ] **10B.4** Verify transaction receiving works: `PUT /_matrix/federation/v1/send/{txnId}` must accept and correctly process PDUs from Complement's test homeserver
+
+**Step 2: Invite over federation** (~11 tests)
+- [ ] **10B.5** Implement `PUT /_matrix/federation/v2/invite/{roomId}/{eventId}` — accept invites from remote servers, store invite membership, return signed event
+- [ ] **10B.6** Implement `PUT /_matrix/federation/v1/invite/{roomId}/{eventId}` — v1 compat (same as v2 but different response format)
+- [ ] **10B.7** Outbound invite: when CS API invite targets a remote user (`@user:otherserver`), send the invite via federation instead of storing locally
+- [ ] **10B.8** InviteFiltering tests: implement `m.room.server_acl` checking on inbound federation requests
+
+**Step 3: Profile over federation** (~3 tests)
+- [ ] **10B.9** Implement `GET /_matrix/federation/v1/query/profile` — serve local user profiles to remote servers (displayname, avatar_url)
+- [ ] **10B.10** Outbound profile query: when CS API requests profile for `@user:otherserver`, query via federation
+
+**Step 4: Device list updates over federation** (~12 tests)
+- [ ] **10B.11** On device change (key upload, device delete), queue `m.device_list_update` EDU to all servers sharing rooms with the user
+- [ ] **10B.12** On inbound `m.device_list_update` EDU, update local cache of remote device keys and notify sync
+- [ ] **10B.13** Track which servers need device list updates via `device_list_update_stream` concept (since tokens per server)
+- [ ] **10B.14** `GET /keys/changes` must return users whose device lists changed since the given token (currently a stub)
+
+**Step 5: Signature verification** (security hardening, unblocks auth tests)
+- [ ] **10B.15** Verify signatures on inbound PDUs in `receiver.rs` before storing: fetch remote server's signing key, verify event signature
+- [ ] **10B.16** Verify signatures on inbound `send_join`/`send_leave` responses
+- [ ] **10B.17** Verify signatures on fetched remote server keys (key_server notary responses)
+- [ ] **10B.18** Reject events with invalid or missing signatures (`TestInboundFederationRejectsEventsWithRejectedAuthEvents`)
+
+**Step 6: Event authorization** (spec compliance)
+- [ ] **10B.19** Implement full event auth rules per room version: check power levels, membership, join_rules, etc. on inbound PDUs
+- [ ] **10B.20** Auth chain calculation: return minimal auth chain for state responses (not entire state)
+- [ ] **10B.21** Auth event selection: correctly select auth events when creating events (m.room.create, m.room.join_rules, m.room.power_levels, sender's m.room.member)
+
+**Step 7: Backfill and messages over federation** (~3 tests)
+- [ ] **10B.22** Outbound backfill: when `/messages` hits the beginning of local history, request earlier events from the room's origin server via `GET /_matrix/federation/v1/backfill/{roomId}`
+- [ ] **10B.23** Fix `get_missing_events` to properly walk the DAG between earliest_events and latest_events
+- [ ] **10B.24** Store backfilled events with correct stream_position ordering
+
+**Step 8: Remaining federation features** (~5 tests)
+- [ ] **10B.25** Federation redactions: `PUT /send/{txnId}` with redaction PDUs must be processed correctly
+- [ ] **10B.26** Remote room alias queries: `GET /_matrix/federation/v1/query/directory` — resolve aliases on remote servers
+- [ ] **10B.27** Presence over federation: properly relay presence EDUs between servers
+- [ ] **10B.28** is_direct flag over federation: preserve in federated invite events
+
+**Step 9: Partial state join** (56 tests — complex, phased approach)
+> MSC3706: "Faster joins". Server joins a room and starts participating immediately with partial state, then backfills the full state in the background. This is the single largest test category.
+
+- [ ] **10B.29** Phase A — Accept partial state joins: respond to `send_join` with `org.matrix.msc3706.partial_state: true` support
+- [ ] **10B.30** Phase B — Initiate partial state joins: on outbound join, request partial state and begin participating before full state arrives
+- [ ] **10B.31** Phase C — Background state resync: after partial join, fetch full state via `/state_ids` + `/state` and resolve
+- [ ] **10B.32** Phase D — Sync during partial state: serve sync responses during resync, block `/members` until complete
+- [ ] **10B.33** Phase E — Edge cases: device list tracking during partial state, leave during resync, event auth with partial state
+
+**Step 10: DNS and transport hardening**
+- [ ] **10B.34** Replace `dig` shell exec for SRV lookups with `hickory-resolver` (pure Rust DNS)
+- [ ] **10B.35** Configurable TLS validation: accept custom CA certs, option to require valid certs in production
+- [ ] **10B.36** Federation rate limiting: per-origin request limits to prevent flooding
+- [ ] **10B.37** Transaction deduplication cleanup: TTL-based expiry of old txn_id records
+
+#### 10C — Client Compatibility & Production Readiness
+
+- [ ] **10.16** Client compatibility testing: Element Web, Element X, FluffyChat, nheko
+- [ ] **10.17** Performance benchmarking: large rooms, message throughput, sync latency
+- [ ] **10.18** Horizontal scaling validation: 3+ instances, consistency checks
+- [ ] **10.19** Chaos testing: kill nodes, verify recovery
+- [ ] **10.20** Security audit: input validation, auth, rate limiting, OWASP top 10
+- [ ] **10.21** Documentation: deployment guide, config reference, architecture overview
 
 #### Deliverable
-Production-ready release candidate. 100% Complement. Validated with clients. Performance targets met.
+Production-ready release candidate. 93%+ Complement (CS API + Federation). Validated with clients. Performance targets met.
 
 ---
 
@@ -548,16 +690,24 @@ Synapse users can migrate to Maelstrom. Kubernetes deployment is one-command. 1.
 | Phase | Name | Status | Dependencies |
 |-------|------|--------|-------------|
 | 1 | Foundation | **Complete** | — |
-| 2 | Authentication & Registration | **Complete** (rate limiting deferred) | Phase 1 |
-| 3 | Rooms & Membership | **Complete** (directory, kick/ban, state res deferred) | Phase 2 |
+| 2 | Authentication & Registration | **Complete** | Phase 1 |
+| 3 | Rooms & Membership | **Complete** | Phase 2 |
 | 4 | Messaging & Sync | **Complete** (incl. sliding sync) | Phase 3 |
-| 5 | E2EE | **Complete** (tests pending) | Phase 4 |
-| 6 | Media | **Complete** | Phase 1 (can parallel with 3-5) |
-| 7 | Federation | **Complete** | Phase 4 |
+| 5 | E2EE | **Complete** | Phase 4 |
+| 6 | Media | **Complete** | Phase 1 |
+| 7 | Federation | **Complete** (infrastructure) | Phase 4 |
 | 8 | Matrix 2.0+ Features | **Complete** | Phase 4 |
 | 9 | Admin & Operations | **Complete** | Phase 6, 7 |
-| 10 | Complement & Hardening | **In Progress** — 147+/370 (39.7%+), up from 92 baseline | Phase 7, 8 |
+| 10A | CS API Hardening | **Complete** — type system, code quality, rustdoc, DRY, async patterns | Phase 7, 8 |
+| 10B | Federation Hardening | **Active** — 0/90 Complement federation tests, 10-step plan ready | Phase 7 |
+| 10C | Client Compat & Prod | Not Started | Phase 10A, 10B |
 | 11 | Migration & 1.0 | Not Started | Phase 10 |
+
+### Current Focus: Phase 10B — Federation Hardening
+
+**Objective**: Pass Complement federation tests. The federation infrastructure exists (~1700 LOC) but needs hardening against the spec compliance test suite.
+
+**Stats**: 95 source files, ~22K LOC, 107 tests passing, zero clippy warnings.
 
 ### Parallelization Opportunities
 

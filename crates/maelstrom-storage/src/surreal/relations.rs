@@ -1,3 +1,17 @@
+//! Event relation storage -- [`RelationStore`](crate::traits::RelationStore) implementation.
+//!
+//! Relations are modeled as SurrealDB graph edges:
+//! `event ->relates_to-> event` with metadata fields (`rel_type`, `sender`,
+//! `event_type`, `content_key`).  This enables queries like "all reactions
+//! on event X" or "latest edit of event Y" via graph traversal.
+//!
+//! Aggregated reaction counts use a `GROUP BY content_key` query with
+//! `count()` to avoid scanning all child events on every read.
+//!
+//! Thread root discovery (`get_thread_roots`) finds parent events in a room
+//! that have at least one `m.thread` child, ordered by stream position for
+//! pagination.
+
 use async_trait::async_trait;
 use surrealdb::types::{RecordId, SurrealValue};
 use tracing::debug;
@@ -6,6 +20,7 @@ use super::SurrealStorage;
 use crate::traits::*;
 
 /// Row from a relates_to query that joins with the event table to get event_id.
+#[allow(dead_code)]
 #[derive(Debug, Clone, SurrealValue)]
 struct RelationQueryRow {
     rel_type: String,
@@ -22,11 +37,13 @@ struct ReactionCountRow {
     count: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, SurrealValue)]
 struct EventIdRow {
     child_event_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, SurrealValue)]
 struct ParentEventIdRow {
     parent_event_id: String,
@@ -46,14 +63,18 @@ impl RelationStore for SurrealStorage {
         let parent_rid = RecordId::new("event", relation.parent_id.as_str());
 
         // Create graph edge: child_event --relates_to--> parent_event
+        // Store event IDs as plain strings on the edge for easy querying
         self.db()
             .query(
                 "RELATE $from->relates_to->$to SET \
                  rel_type = $rtype, room_id = $rid, sender = $sender, \
-                 event_type = $etype, content_key = $ckey",
+                 event_type = $etype, content_key = $ckey, \
+                 child_event_id = $child_eid, parent_event_id = $parent_eid",
             )
             .bind(("from", event_rid))
             .bind(("to", parent_rid))
+            .bind(("child_eid", relation.event_id.clone()))
+            .bind(("parent_eid", relation.parent_id.clone()))
             .bind(("rtype", relation.rel_type.clone()))
             .bind(("rid", relation.room_id.clone()))
             .bind(("sender", relation.sender.clone()))
@@ -71,14 +92,13 @@ impl RelationStore for SurrealStorage {
         rel_type: Option<&str>,
         event_type: Option<&str>,
         limit: usize,
-        _from: Option<&str>,
+        from: Option<&str>,
     ) -> StorageResult<Vec<RelationRecord>> {
         let parent_rid = RecordId::new("event", parent_id);
 
-        // Query graph edges pointing to this parent, join with child event to get event_id
+        // Query graph edges pointing to this parent.
         let mut query = String::from(
-            "SELECT rel_type, room_id, sender, event_type, content_key, \
-             in.event_id AS child_event_id \
+            "SELECT *, child_event_id \
              FROM relates_to WHERE out = $parent",
         );
         if rel_type.is_some() {
@@ -87,7 +107,10 @@ impl RelationStore for SurrealStorage {
         if event_type.is_some() {
             query.push_str(" AND event_type = $etype");
         }
-        query.push_str(" ORDER BY created_at ASC LIMIT $lim");
+        if from.is_some() {
+            query.push_str(" AND id < $from_id");
+        }
+        query.push_str(" ORDER BY id DESC LIMIT $lim");
 
         let mut response = self
             .db()
@@ -95,24 +118,51 @@ impl RelationStore for SurrealStorage {
             .bind(("parent", parent_rid))
             .bind(("rtype", rel_type.unwrap_or("").to_string()))
             .bind(("etype", event_type.unwrap_or("").to_string()))
+            .bind(("from_id", from.unwrap_or("").to_string()))
             .bind(("lim", limit as i64))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        let rows: Vec<RelationQueryRow> = response
+        // Use JSON deserialization for robustness
+        let rows: Vec<serde_json::Value> = response
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
         Ok(rows
             .into_iter()
-            .map(|r| RelationRecord {
-                event_id: r.child_event_id,
-                parent_id: parent_id.to_string(),
-                room_id: r.room_id,
-                rel_type: r.rel_type,
-                sender: r.sender,
-                event_type: r.event_type,
-                content_key: r.content_key,
+            .filter_map(|r| {
+                let child_eid = r
+                    .get("child_event_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())?;
+                Some(RelationRecord {
+                    event_id: child_eid,
+                    parent_id: parent_id.to_string(),
+                    room_id: r
+                        .get("room_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    rel_type: r
+                        .get("rel_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    sender: r
+                        .get("sender")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    event_type: r
+                        .get("event_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    content_key: r
+                        .get("content_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                })
             })
             .collect())
     }
@@ -147,19 +197,22 @@ impl RelationStore for SurrealStorage {
         let mut response = self
             .db()
             .query(
-                "SELECT in.event_id AS child_event_id FROM relates_to \
+                "SELECT *, child_event_id FROM relates_to \
                  WHERE out = $parent AND rel_type = 'm.replace' \
-                 ORDER BY created_at DESC LIMIT 1",
+                 ORDER BY id DESC LIMIT 1",
             )
             .bind(("parent", event_rid))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        let rows: Vec<EventIdRow> = response
+        let rows: Vec<serde_json::Value> = response
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().next().map(|r| r.child_event_id))
+        Ok(rows
+            .into_iter()
+            .next()
+            .and_then(|r| r.get("child_event_id")?.as_str().map(|s| s.to_string())))
     }
 
     async fn get_thread_roots(
@@ -168,25 +221,30 @@ impl RelationStore for SurrealStorage {
         limit: usize,
         _from: Option<i64>,
     ) -> StorageResult<Vec<String>> {
-        // Find distinct parent event_ids that have m.thread children in this room
+        // Find thread roots ordered by their latest reply (most recently active first)
         let mut response = self
             .db()
             .query(
-                "SELECT out.event_id AS parent_event_id FROM relates_to \
+                "SELECT parent_event_id, math::max(id) AS latest_reply \
+                 FROM relates_to \
                  WHERE room_id = $rid AND rel_type = 'm.thread' \
-                 GROUP BY out \
-                 ORDER BY created_at DESC LIMIT $lim",
+                 GROUP BY parent_event_id \
+                 ORDER BY latest_reply DESC \
+                 LIMIT $lim",
             )
             .bind(("rid", room_id.to_string()))
             .bind(("lim", limit as i64))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        let rows: Vec<ParentEventIdRow> = response
+        let rows: Vec<serde_json::Value> = response
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| r.parent_event_id).collect())
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.get("parent_event_id")?.as_str().map(|s| s.to_string()))
+            .collect())
     }
 
     async fn store_report(&self, report: &ReportRecord) -> StorageResult<()> {

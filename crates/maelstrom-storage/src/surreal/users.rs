@@ -1,3 +1,11 @@
+//! User account storage -- [`UserStore`](crate::traits::UserStore) implementation.
+//!
+//! Users are stored in the `user` table, keyed by `localpart`.  Profiles
+//! (display name, avatar URL) are fields on the same record.
+//!
+//! `search_users` uses SurrealDB's full-text search index on the `display_name`
+//! and `localpart` fields to power the `/user_directory/search` endpoint.
+
 use async_trait::async_trait;
 use surrealdb::types::{Datetime, RecordId, SurrealValue};
 use tracing::debug;
@@ -259,5 +267,65 @@ impl UserStore for SurrealStorage {
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
         Ok(())
+    }
+
+    async fn search_users(
+        &self,
+        search_term: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<(String, Option<String>, Option<String>)>> {
+        // Detect mxid searches (exact match on localpart)
+        let is_mxid = search_term.starts_with('@') && search_term.contains(':');
+        let cleaned = search_term
+            .trim_start_matches('@')
+            .split(':')
+            .next()
+            .unwrap_or(search_term);
+        let term_lower = cleaned.to_lowercase();
+
+        // Get all users with their profiles via separate queries
+        let mut response = self
+            .db()
+            .query("SELECT localpart FROM user LIMIT 1000")
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let rows: Vec<serde_json::Value> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let localpart = match row.get("localpart").and_then(|v| v.as_str()) {
+                Some(lp) => lp.to_string(),
+                None => continue,
+            };
+
+            // Get profile for this user
+            let profile = self.get_profile(&localpart).await.ok();
+            let display_name = profile.as_ref().and_then(|p| p.display_name.clone());
+            let avatar_url = profile.as_ref().and_then(|p| p.avatar_url.clone());
+
+            // Check if localpart or display_name matches the search term
+            let localpart_lower = localpart.to_lowercase();
+            let localpart_matches = if is_mxid {
+                localpart_lower == term_lower
+            } else {
+                localpart_lower.contains(&term_lower)
+            };
+            let name_matches = display_name
+                .as_ref()
+                .map(|n| n.to_lowercase().contains(&term_lower))
+                .unwrap_or(false);
+
+            if localpart_matches || name_matches {
+                results.push((localpart, display_name, avatar_url));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(results)
     }
 }

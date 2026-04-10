@@ -1,9 +1,29 @@
+//! Admin media management, quarantine, and retention configuration.
+//!
+//! Provides endpoints for inspecting, quarantining, and configuring retention
+//! policies for media stored in the S3-compatible object store. All endpoints
+//! require admin authentication.
+//!
+//! ## Routes
+//!
+//! | Method | Path                                                            | Operation                     |
+//! |--------|-----------------------------------------------------------------|-------------------------------|
+//! | `GET`  | `/_maelstrom/admin/v1/media/user/{userId}`                      | List media uploaded by a user |
+//! | `POST` | `/_maelstrom/admin/v1/media/{serverName}/{mediaId}/quarantine`  | Quarantine a media item       |
+//! | `POST` | `/_maelstrom/admin/v1/media/{serverName}/{mediaId}/unquarantine`| Remove quarantine             |
+//! | `GET`  | `/_maelstrom/admin/v1/media/retention`                          | Get retention config          |
+//! | `PUT`  | `/_maelstrom/admin/v1/media/retention`                          | Update retention config       |
+//! | `POST` | `/_maelstrom/admin/v1/media/retention/sweep`                    | Trigger an immediate sweep    |
+//!
+//! Quarantined media is blocked from download but not deleted, allowing
+//! admins to review flagged content before permanent removal.
+
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::AdminState;
 use crate::auth::AdminUser;

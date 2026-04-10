@@ -1,9 +1,25 @@
+//! Admin room management endpoints.
+//!
+//! Provides room inspection and moderation operations. All endpoints require
+//! admin authentication.
+//!
+//! ## Routes
+//!
+//! | Method | Path                                             | Operation              |
+//! |--------|--------------------------------------------------|------------------------|
+//! | `GET`  | `/_maelstrom/admin/v1/rooms`                     | List rooms (paginated) |
+//! | `GET`  | `/_maelstrom/admin/v1/rooms/{roomId}`            | Get room details       |
+//! | `POST` | `/_maelstrom/admin/v1/rooms/{roomId}/shutdown`   | Force-shutdown a room  |
+//!
+//! Room listing supports pagination via `limit` and `from` query parameters.
+//! The shutdown endpoint removes the room and kicks all local members.
+
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::AdminState;
 use crate::auth::AdminUser;

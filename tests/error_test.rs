@@ -1,4 +1,4 @@
-use maelstrom_core::error::{ErrorCode, MatrixError};
+use maelstrom_core::matrix::error::{ErrorCode, MatrixError};
 
 #[test]
 fn test_error_code_serialization() {

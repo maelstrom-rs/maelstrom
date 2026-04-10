@@ -1,6 +1,33 @@
+//! In-memory mock storage for testing.
+//!
+//! [`MockStorage`] implements every sub-trait in [`crate::traits`] using
+//! `Mutex<HashMap<...>>` and `Mutex<Vec<...>>` collections.  It is the only
+//! storage backend used by the integration test suite (under `tests/`), which
+//! means tests run without a real database and finish in milliseconds.
+//!
+//! # Design
+//!
+//! Each logical store is a separate `Mutex`-wrapped collection on the struct.
+//! The keys mirror the uniqueness constraints of the real schema (e.g.
+//! `(user_id, room_id)` for membership, `(server_name, media_id)` for media).
+//! A global `AtomicI64` counter simulates the auto-incrementing stream
+//! position used by `/sync`.
+//!
+//! # Gotchas
+//!
+//! * **No persistence** -- data lives only for the lifetime of the struct.
+//! * **No concurrent test isolation** -- if multiple tests share one
+//!   `MockStorage` instance, they will see each other's data.  Each test
+//!   should create its own `MockStorage::new()`.
+//! * **No full-text search** -- `search_events` does a naive substring match
+//!   on `content.body`, not a real BM25 ranking.
+//! * **No graph traversal** -- membership and relations use flat `HashMap`
+//!   lookups instead of SurrealDB graph edges.
+
 use async_trait::async_trait;
-use maelstrom_core::events::pdu::StoredEvent;
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::event::Pdu;
+use maelstrom_core::matrix::id::{DeviceId, UserId};
+use maelstrom_core::matrix::room::{HistoryVisibility, Membership, event_type as et};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -9,7 +36,11 @@ use crate::traits::*;
 
 /// In-memory mock storage for testing.
 ///
-/// Uses `Mutex<HashMap<...>>` internally — not for production use.
+/// Uses `Mutex<HashMap<...>>` internally -- not for production use.
+/// Create one per test with [`MockStorage::new()`] to ensure isolation.
+///
+/// The `set_healthy(false)` helper lets tests simulate a database outage
+/// so that error-handling paths in handlers can be exercised.
 #[derive(Debug, Default)]
 #[allow(clippy::type_complexity)]
 pub struct MockStorage {
@@ -19,9 +50,9 @@ pub struct MockStorage {
     healthy: Mutex<bool>,
     rooms: Mutex<HashMap<String, RoomRecord>>,
     membership: Mutex<HashMap<(String, String), String>>,
-    events: Mutex<Vec<StoredEvent>>,
+    events: Mutex<Vec<Pdu>>,
     room_state: Mutex<HashMap<(String, String, String), String>>,
-    txn_ids: Mutex<HashMap<(String, String), String>>,
+    txn_ids: Mutex<HashMap<String, String>>,
     stream_position: AtomicI64,
     /// Receipts: (user_id, room_id, receipt_type) -> (event_id, ts)
     receipts: Mutex<HashMap<(String, String, String), (String, u64)>>,
@@ -143,6 +174,40 @@ impl UserStore for MockStorage {
         let profile = profiles.get_mut(localpart).ok_or(StorageError::NotFound)?;
         profile.avatar_url = url.map(|s| s.to_string());
         Ok(())
+    }
+
+    async fn search_users(
+        &self,
+        search_term: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<(String, Option<String>, Option<String>)>> {
+        let profiles = self.profiles.lock().unwrap();
+        let cleaned = search_term
+            .trim_start_matches('@')
+            .split(':')
+            .next()
+            .unwrap_or(search_term);
+        let term = cleaned.to_lowercase();
+        let results: Vec<_> = profiles
+            .iter()
+            .filter(|(localpart, profile)| {
+                localpart.to_lowercase().contains(&term)
+                    || profile
+                        .display_name
+                        .as_ref()
+                        .map(|n| n.to_lowercase().contains(&term))
+                        .unwrap_or(false)
+            })
+            .take(limit)
+            .map(|(localpart, profile)| {
+                (
+                    localpart.clone(),
+                    profile.display_name.clone(),
+                    profile.avatar_url.clone(),
+                )
+            })
+            .collect();
+        Ok(results)
     }
 }
 
@@ -283,7 +348,7 @@ impl RoomStore for MockStorage {
         let membership = self.membership.lock().unwrap();
         Ok(membership
             .iter()
-            .filter(|((uid, _), state)| uid == user_id && *state == "join")
+            .filter(|((uid, _), state)| uid == user_id && *state == Membership::Join.as_str())
             .map(|((_, room_id), _)| room_id.clone())
             .collect())
     }
@@ -292,7 +357,7 @@ impl RoomStore for MockStorage {
         let membership = self.membership.lock().unwrap();
         Ok(membership
             .iter()
-            .filter(|((uid, _), state)| uid == user_id && *state == "invite")
+            .filter(|((uid, _), state)| uid == user_id && *state == Membership::Invite.as_str())
             .map(|((_, room_id), _)| room_id.clone())
             .collect())
     }
@@ -301,7 +366,7 @@ impl RoomStore for MockStorage {
         let membership = self.membership.lock().unwrap();
         Ok(membership
             .iter()
-            .filter(|((uid, _), state)| uid == user_id && *state == "leave")
+            .filter(|((uid, _), state)| uid == user_id && *state == Membership::Leave.as_str())
             .map(|((_, room_id), _)| room_id.clone())
             .collect())
     }
@@ -413,7 +478,7 @@ impl RoomStore for MockStorage {
         for rid in public_room_ids.iter().skip(start).take(limit) {
             // Get name from room_state
             let name = room_state
-                .get(&(rid.clone(), "m.room.name".to_string(), String::new()))
+                .get(&(rid.clone(), et::NAME.to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| {
                     e.content
@@ -424,7 +489,7 @@ impl RoomStore for MockStorage {
 
             // Get topic from room_state
             let topic = room_state
-                .get(&(rid.clone(), "m.room.topic".to_string(), String::new()))
+                .get(&(rid.clone(), et::TOPIC.to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| {
                     e.content
@@ -436,28 +501,24 @@ impl RoomStore for MockStorage {
             // Count joined members
             let num_joined = membership
                 .iter()
-                .filter(|((_, r), state)| r == rid && *state == "join")
+                .filter(|((_, r), state)| r == rid && *state == Membership::Join.as_str())
                 .count();
 
             // Check world_readable
             let world_readable = room_state
                 .get(&(
                     rid.clone(),
-                    "m.room.history_visibility".to_string(),
+                    et::HISTORY_VISIBILITY.to_string(),
                     String::new(),
                 ))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| e.content.get("history_visibility").and_then(|v| v.as_str()))
-                .map(|v| v == "world_readable")
+                .map(|v| v == HistoryVisibility::WorldReadable.as_str())
                 .unwrap_or(false);
 
             // Check guest_can_join
             let guest_can_join = room_state
-                .get(&(
-                    rid.clone(),
-                    "m.room.guest_access".to_string(),
-                    String::new(),
-                ))
+                .get(&(rid.clone(), et::GUEST_ACCESS.to_string(), String::new()))
                 .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
                 .and_then(|e| e.content.get("guest_access").and_then(|v| v.as_str()))
                 .map(|v| v == "can_join")
@@ -568,7 +629,7 @@ impl RoomStore for MockStorage {
 
 #[async_trait]
 impl EventStore for MockStorage {
-    async fn store_event(&self, event: &StoredEvent) -> StorageResult<i64> {
+    async fn store_event(&self, event: &Pdu) -> StorageResult<i64> {
         let pos = self.stream_position.fetch_add(1, Ordering::SeqCst) + 1;
         let mut stored = event.clone();
         stored.stream_position = pos;
@@ -576,7 +637,7 @@ impl EventStore for MockStorage {
         Ok(pos)
     }
 
-    async fn get_event(&self, event_id: &str) -> StorageResult<StoredEvent> {
+    async fn get_event(&self, event_id: &str) -> StorageResult<Pdu> {
         self.events
             .lock()
             .unwrap()
@@ -592,12 +653,12 @@ impl EventStore for MockStorage {
         from: i64,
         limit: usize,
         dir: &str,
-    ) -> StorageResult<Vec<StoredEvent>> {
+    ) -> StorageResult<Vec<Pdu>> {
         let events = self.events.lock().unwrap();
         match dir {
             "b" => {
                 // Backward: events in this room with stream_position < from, in reverse order
-                let mut result: Vec<StoredEvent> = events
+                let mut result: Vec<Pdu> = events
                     .iter()
                     .filter(|e| e.room_id == room_id && e.stream_position < from)
                     .cloned()
@@ -608,7 +669,7 @@ impl EventStore for MockStorage {
             }
             _ => {
                 // Forward: events in this room with stream_position > from, in order
-                let mut result: Vec<StoredEvent> = events
+                let mut result: Vec<Pdu> = events
                     .iter()
                     .filter(|e| e.room_id == room_id && e.stream_position > from)
                     .cloned()
@@ -620,9 +681,9 @@ impl EventStore for MockStorage {
         }
     }
 
-    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<StoredEvent>> {
+    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<Pdu>> {
         let events = self.events.lock().unwrap();
-        let mut result: Vec<StoredEvent> = events
+        let mut result: Vec<Pdu> = events
             .iter()
             .filter(|e| e.stream_position > since)
             .cloned()
@@ -649,7 +710,7 @@ impl EventStore for MockStorage {
         Ok(())
     }
 
-    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<StoredEvent>> {
+    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<Pdu>> {
         let room_state = self.room_state.lock().unwrap();
         let events = self.events.lock().unwrap();
 
@@ -673,7 +734,7 @@ impl EventStore for MockStorage {
         room_id: &str,
         event_type: &str,
         state_key: &str,
-    ) -> StorageResult<StoredEvent> {
+    ) -> StorageResult<Pdu> {
         let room_state = self.room_state.lock().unwrap();
         let event_id = room_state
             .get(&(
@@ -699,7 +760,7 @@ impl EventStore for MockStorage {
         event_type: &str,
         state_key: &str,
         at_position: i64,
-    ) -> StorageResult<StoredEvent> {
+    ) -> StorageResult<Pdu> {
         let events = self.events.lock().unwrap();
         events
             .iter()
@@ -725,22 +786,28 @@ impl EventStore for MockStorage {
     async fn store_txn_id(
         &self,
         device_id: &str,
+        room_id: &str,
         txn_id: &str,
         event_id: &str,
     ) -> StorageResult<()> {
         self.txn_ids.lock().unwrap().insert(
-            (device_id.to_string(), txn_id.to_string()),
+            format!("{device_id}:{room_id}:{txn_id}"),
             event_id.to_string(),
         );
         Ok(())
     }
 
-    async fn get_txn_event(&self, device_id: &str, txn_id: &str) -> StorageResult<Option<String>> {
+    async fn get_txn_event(
+        &self,
+        device_id: &str,
+        room_id: &str,
+        txn_id: &str,
+    ) -> StorageResult<Option<String>> {
         Ok(self
             .txn_ids
             .lock()
             .unwrap()
-            .get(&(device_id.to_string(), txn_id.to_string()))
+            .get(&format!("{device_id}:{room_id}:{txn_id}"))
             .cloned())
     }
 
@@ -749,10 +816,10 @@ impl EventStore for MockStorage {
         room_ids: &[String],
         query: &str,
         limit: usize,
-    ) -> StorageResult<Vec<StoredEvent>> {
+    ) -> StorageResult<Vec<Pdu>> {
         let events = self.events.lock().unwrap();
         let query_lower = query.to_lowercase();
-        let results: Vec<StoredEvent> = events
+        let results: Vec<Pdu> = events
             .iter()
             .filter(|e| {
                 room_ids.contains(&e.room_id)
@@ -785,6 +852,7 @@ impl ReceiptStore for MockStorage {
         room_id: &str,
         receipt_type: &str,
         event_id: &str,
+        _thread_id: Option<&str>,
     ) -> StorageResult<()> {
         let mut map = self.receipts.lock().unwrap();
         let now_ms = std::time::SystemTime::now()
@@ -812,6 +880,7 @@ impl ReceiptStore for MockStorage {
                 receipt_type: rtype.clone(),
                 event_id: eid.clone(),
                 ts: *ts,
+                thread_id: None,
             })
             .collect())
     }
@@ -1031,6 +1100,52 @@ impl AccountDataStore for MockStorage {
             .get(&(user_id.to_string(), room_key, data_type.to_string()))
             .cloned()
             .ok_or(StorageError::NotFound)
+    }
+
+    async fn get_all_account_data(
+        &self,
+        user_id: &str,
+    ) -> StorageResult<Vec<(String, serde_json::Value)>> {
+        let data = self.account_data.lock().unwrap();
+        let result: Vec<(String, serde_json::Value)> = data
+            .iter()
+            .filter(|((uid, room_key, dtype), _)| {
+                uid == user_id && room_key.is_empty() && !dtype.starts_with("_maelstrom.")
+            })
+            .map(|((_, _, dtype), content)| (dtype.clone(), content.clone()))
+            .collect();
+        Ok(result)
+    }
+
+    async fn get_all_room_account_data(
+        &self,
+        user_id: &str,
+        room_id: &str,
+    ) -> StorageResult<Vec<(String, serde_json::Value)>> {
+        let data = self.account_data.lock().unwrap();
+        let result: Vec<(String, serde_json::Value)> = data
+            .iter()
+            .filter(|((uid, rk, dtype), _)| {
+                uid == user_id && rk == room_id && !dtype.starts_with("_maelstrom.")
+            })
+            .map(|((_, _, dtype), content)| (dtype.clone(), content.clone()))
+            .collect();
+        Ok(result)
+    }
+
+    async fn delete_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+    ) -> StorageResult<()> {
+        let room_key = room_id.unwrap_or("").to_string();
+        self.account_data.lock().unwrap().remove(&(
+            user_id.to_string(),
+            room_key,
+            data_type.to_string(),
+        ));
+        Ok(())
     }
 }
 

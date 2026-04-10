@@ -29,7 +29,35 @@ There is no open-source Matrix homeserver that offers simple horizontal scaling 
 
 **Alpha** -- under active development. Core functionality works. Not yet recommended for production deployments carrying real user data.
 
-Complement test suite: **147+/370 CS API tests passing** (39.7%). Registration, login, profile, and E2EE subsystems are solid. Room operations and sync are being hardened.
+### Complement Test Results (2026-04-10)
+
+**311 / 530 tests passing (58.7%)**  ·  107 internal tests  ·  zero clippy warnings
+
+| Category | Pass | Total | Rate |
+|----------|------|-------|------|
+| Registration | 25 | 25 | 100% |
+| Login/Auth | 29 | 29 | 100% |
+| Rooms | 73 | 83 | 88% |
+| Keys/E2EE | 25 | 34 | 74% |
+| Profile | 11 | 15 | 73% |
+| Messages | 31 | 50 | 62% |
+| Other | 25 | 42 | 60% |
+| Members | 25 | 46 | 54% |
+| Search | 3 | 7 | 43% |
+| Account | 4 | 10 | 40% |
+| Sync | 34 | 87 | 39% |
+| Push | 2 | 7 | 29% |
+| State | 19 | 67 | 28% |
+| Typing | 1 | 4 | 25% |
+| Media | 1 | 5 | 20% |
+| Relations | 2 | 13 | 15% |
+| Federation | 1 | 2 | 50% |
+| Receipts | 0 | 2 | 0% |
+| Presence | 0 | 2 | 0% |
+
+**Solid foundations**: Registration, login/auth, room creation, E2EE keys, and profiles are at or near 100%.
+
+**Actively working on**: Federation hardening, sync edge cases, state resolution, relations, and receipts.
 
 ## Quick Start
 

@@ -1,9 +1,26 @@
+//! Content reporting.
+//!
+//! Allows users to report an event in a room as inappropriate. The report
+//! includes an optional `reason` string and a `score` (from -100 to 0, where
+//! -100 is the most offensive). Reports are stored for server administrators
+//! to review and do not directly affect the reported content.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `POST` | `/_matrix/client/v3/rooms/{roomId}/report/{eventId}` | Report an event as inappropriate |
+//!
+//! # Matrix spec
+//!
+//! * [Reporting content](https://spec.matrix.org/v1.12/client-server-api/#reporting-content)
+
 use axum::extract::{Path, State};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_storage::traits::ReportRecord;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};

@@ -1,12 +1,40 @@
+//! Matrix-spec-compliant JSON body extraction with proper error codes.
+//!
+//! Axum's built-in `Json<T>` extractor returns plain-text error messages when
+//! deserialization fails.  The Matrix spec requires errors to be JSON objects
+//! with `errcode` and `error` fields.  This module provides [`MatrixJson`],
+//! a drop-in replacement that returns the correct error format.
+
 use axum::extract::{FromRequest, Request};
 use axum::response::{IntoResponse, Response};
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 use serde::de::DeserializeOwned;
 
-/// Matrix-spec-compliant JSON body extractor.
+/// Drop-in replacement for `axum::Json<T>` that returns Matrix-spec-compliant
+/// error responses.
 ///
-/// Returns `M_NOT_JSON` if Content-Type is not `application/json`.
-/// Returns `M_BAD_JSON` if the body fails to parse.
+/// # Error mapping
+///
+/// | Condition | Matrix error code |
+/// |---|---|
+/// | `Content-Type` is not `application/json` | `M_NOT_JSON` |
+/// | Body is not valid UTF-8 | `M_NOT_JSON` |
+/// | Body fails to deserialize into `T` | `M_BAD_JSON` |
+/// | Body exceeds 1 MiB | `M_BAD_JSON` |
+///
+/// # Usage
+///
+/// Use `MatrixJson` in place of `Json` for any handler that accepts a JSON
+/// request body:
+///
+/// ```rust,ignore
+/// async fn send_message(
+///     MatrixJson(body): MatrixJson<SendMessageRequest>,
+/// ) -> Result<Json<SendMessageResponse>, MatrixError> { ... }
+/// ```
+///
+/// `MatrixJson` also implements `IntoResponse`, so you can return it from
+/// handlers the same way you'd return `Json`.
 pub struct MatrixJson<T>(pub T);
 
 impl<T> FromRequest<crate::state::AppState> for MatrixJson<T>

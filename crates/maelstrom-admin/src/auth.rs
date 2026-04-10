@@ -1,8 +1,24 @@
+//! Admin authentication -- server-admin verification extractor.
+//!
+//! Provides the [`AdminUser`] Axum extractor, which validates incoming requests
+//! in two steps:
+//!
+//! 1. **Token lookup** -- Extracts the `Bearer` token from the `Authorization`
+//!    header and resolves it to a device record via `Storage::get_device_by_token`.
+//!    This is the same mechanism the Client-Server API uses for regular users.
+//!
+//! 2. **Admin check** -- Loads the user account and verifies that `is_admin` is
+//!    `true`. Non-admin users receive `M_FORBIDDEN`; missing or invalid tokens
+//!    receive `M_MISSING_TOKEN` or `M_UNKNOWN_TOKEN`.
+//!
+//! The extractor yields an [`AdminUser`] containing the verified `UserId`, which
+//! handlers can use for audit logging or scoped operations.
+
 use axum::extract::FromRequestParts;
 use http::request::Parts;
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::identifiers::UserId;
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::UserId;
 
 use crate::AdminState;
 

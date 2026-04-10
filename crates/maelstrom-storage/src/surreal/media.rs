@@ -1,3 +1,12 @@
+//! Media metadata storage -- [`MediaStore`](crate::traits::MediaStore) implementation.
+//!
+//! Media metadata is stored in the `media` table, keyed by
+//! `(server_name, media_id)`.  The actual file bytes live in object storage
+//! (RustFS / S3-compatible); only the `s3_key` pointer is persisted here.
+//!
+//! `list_media_before` supports retention policies by finding old media
+//! eligible for cleanup.
+
 use async_trait::async_trait;
 use surrealdb::types::{Datetime, SurrealValue};
 use tracing::debug;

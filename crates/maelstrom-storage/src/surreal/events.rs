@@ -1,5 +1,21 @@
+//! Event storage operations -- [`EventStore`](crate::traits::EventStore) implementation.
+//!
+//! Events (PDUs) are stored in the `event` table, each assigned a monotonically
+//! increasing `stream_position` that drives `/sync` pagination.
+//!
+//! The current room state map is maintained in a separate `room_state` table
+//! keyed by `(room_id, event_type, state_key)`, pointing to the latest
+//! `event_id` for that slot.
+//!
+//! Full-text search (`search_events`) uses SurrealDB's built-in full-text
+//! index on `content.body` with the `@@ (match)` operator and
+//! `search::score()` for BM25 relevance ranking.
+//!
+//! Transaction-ID deduplication (`store_txn_id` / `get_txn_event`) prevents
+//! duplicate event creation when a client retries a request.
+
 use async_trait::async_trait;
-use maelstrom_core::events::pdu::StoredEvent;
+use maelstrom_core::matrix::event::Pdu;
 use surrealdb::types::{RecordId, SurrealValue};
 use tracing::debug;
 
@@ -28,8 +44,8 @@ struct EventRow {
 }
 
 impl EventRow {
-    fn into_stored_event(self) -> StoredEvent {
-        StoredEvent {
+    fn into_pdu(self) -> Pdu {
+        Pdu {
             event_id: self.event_id,
             room_id: self.room_id,
             sender: self.sender,
@@ -69,7 +85,7 @@ struct TxnIdRow {
 
 #[async_trait]
 impl EventStore for SurrealStorage {
-    async fn store_event(&self, event: &StoredEvent) -> StorageResult<i64> {
+    async fn store_event(&self, event: &Pdu) -> StorageResult<i64> {
         debug!(event_id = %event.event_id, room_id = %event.room_id, "Storing event");
 
         // Get the next stream position with retry
@@ -161,7 +177,7 @@ impl EventStore for SurrealStorage {
         Ok(pos)
     }
 
-    async fn get_event(&self, event_id: &str) -> StorageResult<StoredEvent> {
+    async fn get_event(&self, event_id: &str) -> StorageResult<Pdu> {
         let rid = RecordId::new("event", event_id);
 
         let result: Option<EventRow> = self
@@ -171,7 +187,7 @@ impl EventStore for SurrealStorage {
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
         result
-            .map(|row| row.into_stored_event())
+            .map(|row| row.into_pdu())
             .ok_or(StorageError::NotFound)
     }
 
@@ -181,7 +197,7 @@ impl EventStore for SurrealStorage {
         from: i64,
         limit: usize,
         dir: &str,
-    ) -> StorageResult<Vec<StoredEvent>> {
+    ) -> StorageResult<Vec<Pdu>> {
         let query = if dir == "b" {
             "SELECT * FROM event WHERE room_id = $rid AND stream_position < $from \
              ORDER BY stream_position DESC LIMIT $lim"
@@ -203,10 +219,10 @@ impl EventStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| r.into_stored_event()).collect())
+        Ok(rows.into_iter().map(|r| r.into_pdu()).collect())
     }
 
-    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<StoredEvent>> {
+    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<Pdu>> {
         let mut response = self
             .db()
             .query(
@@ -221,7 +237,7 @@ impl EventStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        let events: Vec<StoredEvent> = rows.into_iter().map(|r| r.into_stored_event()).collect();
+        let events: Vec<Pdu> = rows.into_iter().map(|r| r.into_pdu()).collect();
         if !events.is_empty() {
             debug!(since = %since, count = %events.len(), "get_events_since returned events");
         }
@@ -264,7 +280,7 @@ impl EventStore for SurrealStorage {
         Ok(())
     }
 
-    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<StoredEvent>> {
+    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<Pdu>> {
         // First get all event_ids from room_state for this room.
         let mut response = self
             .db()
@@ -295,7 +311,7 @@ impl EventStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| r.into_stored_event()).collect())
+        Ok(rows.into_iter().map(|r| r.into_pdu()).collect())
     }
 
     async fn get_state_event(
@@ -303,7 +319,7 @@ impl EventStore for SurrealStorage {
         room_id: &str,
         event_type: &str,
         state_key: &str,
-    ) -> StorageResult<StoredEvent> {
+    ) -> StorageResult<Pdu> {
         let mut response = self
             .db()
             .query(
@@ -335,7 +351,7 @@ impl EventStore for SurrealStorage {
         event_type: &str,
         state_key: &str,
         at_position: i64,
-    ) -> StorageResult<StoredEvent> {
+    ) -> StorageResult<Pdu> {
         // Find the most recent state event of this type that was stored at or before the given position
         let mut response = self
             .db()
@@ -358,7 +374,7 @@ impl EventStore for SurrealStorage {
 
         rows.into_iter()
             .next()
-            .map(|r| r.into_stored_event())
+            .map(|r| r.into_pdu())
             .ok_or(StorageError::NotFound)
     }
 
@@ -414,35 +430,48 @@ impl EventStore for SurrealStorage {
     async fn store_txn_id(
         &self,
         device_id: &str,
+        room_id: &str,
         txn_id: &str,
         event_id: &str,
     ) -> StorageResult<()> {
         debug!(device_id = %device_id, txn_id = %txn_id, event_id = %event_id, "Storing txn_id");
 
-        self.db()
-            .query("CREATE txn_id SET device_id = $did, txn_id = $tid, event_id = $eid")
+        // Use a deterministic record ID so duplicate stores are idempotent.
+        // The first store wins — CREATE on existing record is silently ignored.
+        let record_key = format!("{device_id}:{room_id}:{txn_id}");
+        let rid = RecordId::new("txn_id", record_key.as_str());
+
+        // INSERT with ON DUPLICATE KEY — first store wins (no-op update preserves original event_id)
+        let _ = self
+            .db()
+            .query(
+                "INSERT INTO txn_id { id: $rid, device_id: $did, room_id: $roomid, txn_id: $tid, event_id: $eid } \
+                 ON DUPLICATE KEY UPDATE device_id = device_id",
+            )
+            .bind(("rid", rid))
             .bind(("did", device_id.to_string()))
+            .bind(("roomid", room_id.to_string()))
             .bind(("tid", txn_id.to_string()))
             .bind(("eid", event_id.to_string()))
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("already exists") || msg.contains("unique") {
-                    StorageError::Duplicate(format!("{device_id}:{txn_id}"))
-                } else {
-                    StorageError::Query(msg)
-                }
-            })?;
+            .await;
 
         Ok(())
     }
 
-    async fn get_txn_event(&self, device_id: &str, txn_id: &str) -> StorageResult<Option<String>> {
+    async fn get_txn_event(
+        &self,
+        device_id: &str,
+        room_id: &str,
+        txn_id: &str,
+    ) -> StorageResult<Option<String>> {
+        // Use the deterministic record ID for direct lookup
+        let record_key = format!("{device_id}:{room_id}:{txn_id}");
+        let rid = RecordId::new("txn_id", record_key.as_str());
+
         let mut response = self
             .db()
-            .query("SELECT event_id FROM txn_id WHERE device_id = $did AND txn_id = $tid")
-            .bind(("did", device_id.to_string()))
-            .bind(("tid", txn_id.to_string()))
+            .query("SELECT event_id FROM ONLY $rid")
+            .bind(("rid", rid))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
@@ -458,7 +487,7 @@ impl EventStore for SurrealStorage {
         room_ids: &[String],
         query: &str,
         limit: usize,
-    ) -> StorageResult<Vec<StoredEvent>> {
+    ) -> StorageResult<Vec<Pdu>> {
         debug!(query = %query, rooms = ?room_ids, limit = %limit, "Searching events");
 
         let mut response = self
@@ -480,7 +509,7 @@ impl EventStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| r.into_stored_event()).collect())
+        Ok(rows.into_iter().map(|r| r.into_pdu()).collect())
     }
 
     async fn redact_event(&self, event_id: &str) -> StorageResult<()> {

@@ -1,3 +1,15 @@
+//! Askama HTML templates for the admin SSR dashboard.
+//!
+//! Each struct in this module derives [`askama::Template`] and maps to an HTML
+//! file under `templates/pages/`. Askama compiles these templates at build time
+//! into Rust code, so rendering is allocation-light and cannot fail at runtime
+//! due to missing template files.
+//!
+//! Templates are rendered in the [`super::handlers::dashboard`] handlers and
+//! returned as `Html<String>` responses. The template files use Jinja2-style
+//! syntax with access to the struct fields for dynamic content (server name,
+//! uptime, memory usage, etc.).
+
 use askama::Template;
 
 #[derive(Template)]

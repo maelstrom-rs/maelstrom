@@ -1,9 +1,29 @@
+//! Thread listing.
+//!
+//! Returns a paginated list of thread roots in a room. Each thread is started
+//! by an event that has at least one `m.thread` relation pointing to it.
+//! Clients use this endpoint to render a "Threads" panel showing all active
+//! conversations without scrolling through the full timeline.
+//!
+//! Results can optionally be filtered to only threads the current user has
+//! participated in (via the `include` query parameter).
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `GET` | `/_matrix/client/v1/rooms/{roomId}/threads` | List thread roots in a room |
+//!
+//! # Matrix spec
+//!
+//! * [Threads](https://spec.matrix.org/v1.12/client-server-api/#threading)
+
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::AuthenticatedUser;
 use crate::state::AppState;
@@ -50,7 +70,7 @@ async fn get_threads(
     let mut chunk = Vec::new();
     for root_id in &thread_roots {
         if let Ok(event) = state.storage().get_event(root_id).await {
-            let mut client_event = event.to_client_event();
+            let mut client_event = event.to_client_event().into_json();
 
             // Add thread aggregation to unsigned
             if let Some(agg) = super::relations::build_aggregations(state.storage(), root_id).await

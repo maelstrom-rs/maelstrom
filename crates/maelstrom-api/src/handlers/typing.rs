@@ -1,9 +1,30 @@
+//! Typing indicators.
+//!
+//! Typing notifications are **ephemeral** -- they are never persisted to the
+//! event graph and exist only in memory. When a user starts typing, their client
+//! sends a request with `typing: true` and an optional `timeout` (default
+//! ~30 seconds). The server holds this state and delivers it to other room
+//! members via the `ephemeral` section of `/sync`.
+//!
+//! If the user stops typing (or the timeout expires without renewal), the
+//! indicator is automatically cleared.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `PUT` | `/_matrix/client/v3/rooms/{roomId}/typing/{userId}` | Set or clear the typing indicator for a user in a room |
+//!
+//! # Matrix spec
+//!
+//! * [Typing notifications](https://spec.matrix.org/v1.12/client-server-api/#typing-notifications)
+
 use axum::extract::{Path, State};
 use axum::routing::put;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::notify::Notification;

@@ -1,10 +1,37 @@
+//! Read receipts.
+//!
+//! Receipts let users indicate how far they have read in a room. When a client
+//! sends a receipt for an event, the server records it and distributes it to
+//! other members via the `ephemeral` section of `/sync` as `m.receipt` events.
+//!
+//! The primary receipt type is `m.read`, which updates the read marker visible
+//! to other users. There is also `m.read.private` (visible only to the sender)
+//! and `m.fully_read` (the "read marker" line in the timeline, set via
+//! `/read_markers`).
+//!
+//! Receipts are **ephemeral events** -- they are not part of the room's
+//! persistent event DAG, though the server stores the latest receipt per-user
+//! to include in future `/sync` responses.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `POST` | `/_matrix/client/v3/rooms/{roomId}/receipt/{receiptType}/{eventId}` | Send a receipt marking the given event as read |
+//!
+//! # Matrix spec
+//!
+//! * [Receipts](https://spec.matrix.org/v1.12/client-server-api/#receipts)
+
 use axum::extract::{Path, State};
 use axum::routing::post;
 use axum::{Json, Router};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::room::Membership;
 
 use crate::extractors::AuthenticatedUser;
+use crate::handlers::util::require_membership;
 use crate::notify::Notification;
 use crate::state::AppState;
 
@@ -19,22 +46,33 @@ async fn send_receipt(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path((room_id, receipt_type, event_id)): Path<(String, String, String)>,
+    body: Option<axum::Json<serde_json::Value>>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let storage = state.storage();
     let sender = auth.user_id.to_string();
 
     // Check user is in the room
-    let membership = storage
-        .get_membership(&sender, &room_id)
-        .await
-        .map_err(|_| MatrixError::forbidden("You are not in this room"))?;
+    let membership = require_membership(storage, &sender, &room_id).await?;
 
-    if membership != "join" {
+    if membership != Membership::Join.as_str() {
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
+    // Extract thread_id from request body (MSC4102)
+    let thread_id = body
+        .as_ref()
+        .and_then(|b| b.get("thread_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     storage
-        .set_receipt(&sender, &room_id, &receipt_type, &event_id)
+        .set_receipt(
+            &sender,
+            &room_id,
+            &receipt_type,
+            &event_id,
+            thread_id.as_deref(),
+        )
         .await
         .map_err(|e| MatrixError::unknown(e.to_string()))?;
 

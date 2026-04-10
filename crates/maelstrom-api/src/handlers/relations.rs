@@ -1,9 +1,41 @@
+//! Event relations -- threads, reactions, edits, and aggregations.
+//!
+//! Events can relate to other events using the `m.relates_to` field. The server
+//! tracks these relationships and serves them back through the relations
+//! endpoints, both as raw child events and as server-side aggregations.
+//!
+//! The main relation types are:
+//!
+//! * **`m.annotation`** -- reactions (e.g. emoji). Aggregated into a count per
+//!   key on the parent event.
+//! * **`m.replace`** -- edits. The server replaces the parent event's content
+//!   with the latest edit in aggregated views.
+//! * **`m.thread`** -- threads. Groups reply chains under a root event,
+//!   surfaced as a threaded conversation.
+//! * **`m.reference`** -- generic references (e.g. verification events).
+//!
+//! The endpoints support filtering by relation type and/or event type, and
+//! return paginated results.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Description |
+//! |--------|------|-------------|
+//! | `GET` | `/_matrix/client/v1/rooms/{roomId}/relations/{eventId}` | Get all relations for an event |
+//! | `GET` | `/_matrix/client/v1/rooms/{roomId}/relations/{eventId}/{relType}` | Get relations filtered by relation type |
+//! | `GET` | `/_matrix/client/v1/rooms/{roomId}/relations/{eventId}/{relType}/{eventType}` | Get relations filtered by both relation type and event type |
+//!
+//! # Matrix spec
+//!
+//! * [Relationships between events](https://spec.matrix.org/v1.12/client-server-api/#relationships-between-events)
+//! * [Aggregations of child events](https://spec.matrix.org/v1.12/client-server-api/#aggregations-of-child-events)
+
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::AuthenticatedUser;
 use crate::state::AppState;
@@ -29,6 +61,8 @@ struct RelationsQuery {
     #[serde(default = "default_limit")]
     limit: usize,
     from: Option<String>,
+    #[allow(dead_code)]
+    dir: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -140,13 +174,20 @@ async fn fetch_relations(
     let mut chunk = Vec::new();
     for rel in &relations {
         if let Ok(event) = state.storage().get_event(&rel.event_id).await {
-            chunk.push(event.to_client_event());
+            chunk.push(event.to_client_event().into_json());
         }
     }
 
-    Ok(Json(serde_json::json!({
-        "chunk": chunk,
-    })))
+    // Return next_batch if there are more results (we fetched limit items)
+    let mut response = serde_json::json!({ "chunk": chunk });
+    if chunk.len() == limit.min(100) {
+        // Use the last event_id as the cursor token
+        if let Some(last) = relations.last() {
+            response["next_batch"] = serde_json::json!(last.event_id);
+        }
+    }
+
+    Ok(Json(response))
 }
 
 /// Build bundled aggregations for an event (reactions, edits, thread summary).
@@ -181,7 +222,10 @@ pub async fn build_aggregations(
     if let Ok(Some(edit_event_id)) = storage.get_latest_edit(event_id).await
         && let Ok(edit_event) = storage.get_event(&edit_event_id).await
     {
-        aggregations.insert("m.replace".to_string(), edit_event.to_client_event());
+        aggregations.insert(
+            "m.replace".to_string(),
+            edit_event.to_client_event().into_json(),
+        );
     }
 
     // Thread summary
@@ -205,7 +249,7 @@ pub async fn build_aggregations(
             aggregations.insert(
                 "m.thread".to_string(),
                 serde_json::json!({
-                    "latest_event": latest_event.to_client_event(),
+                    "latest_event": latest_event.to_client_event().into_json(),
                     "count": count,
                     "current_user_participated": false,
                 }),

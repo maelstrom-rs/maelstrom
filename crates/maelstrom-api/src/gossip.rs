@@ -22,7 +22,7 @@ use chitchat::{ChitchatHandle, ListenerHandle};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use maelstrom_core::ephemeral::{EphemeralDelta, EphemeralStore};
+use maelstrom_core::matrix::ephemeral::{EphemeralDelta, EphemeralStore};
 
 use crate::notify::{Notification, Notifier};
 

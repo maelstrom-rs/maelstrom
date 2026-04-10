@@ -1,8 +1,51 @@
-use maelstrom_core::signatures::{canonical_json, keys::KeyPair};
+//! # X-Matrix Request Signing
+//!
+//! Every federation HTTP request in Matrix is authenticated using the **X-Matrix**
+//! authorization scheme. This module handles both signing outbound requests and
+//! verifying inbound ones.
+//!
+//! ## What Gets Signed
+//!
+//! The signature is computed over a JSON object containing:
+//!
+//! - `method` -- the HTTP method (e.g., `GET`, `PUT`)
+//! - `uri` -- the request path (e.g., `/_matrix/federation/v1/send/txn123`)
+//! - `origin` -- the sending server's name (e.g., `alice.com`)
+//! - `destination` -- the receiving server's name (e.g., `bob.org`)
+//! - `content` -- the request body (only for requests that have one, like PUT)
+//!
+//! This JSON object is converted to **canonical JSON** (deterministic key ordering,
+//! no optional whitespace) and then signed with the server's Ed25519 key.
+//!
+//! ## Authorization Header Format
+//!
+//! The resulting `Authorization` header looks like:
+//!
+//! ```text
+//! X-Matrix origin="alice.com",destination="bob.org",key="ed25519:abc123",sig="<base64>"
+//! ```
+//!
+//! The receiving server parses this header, looks up the origin server's public key
+//! (from `/_matrix/key/v2/server` or a cached copy), and verifies the signature
+//! against the same canonical JSON reconstruction of the request.
+//!
+//! ## Functions
+//!
+//! - [`sign_request`] -- produce an `Authorization` header value for an outbound request
+//! - [`parse_x_matrix_header`] -- extract `(origin, key_id, signature)` from an inbound header
+//! - [`verify_request`] -- verify an inbound request signature against a known public key
+
+use maelstrom_core::matrix::json::CanonicalJson;
+use maelstrom_core::matrix::keys::KeyPair;
 
 /// Sign an outbound federation HTTP request.
 ///
-/// Returns the `Authorization` header value in the `X-Matrix` scheme.
+/// Constructs the canonical JSON object from the request parameters, signs it with
+/// the provided key pair, and returns the full `Authorization` header value in the
+/// `X-Matrix` scheme.
+///
+/// If the request has a body (e.g., PUT requests), pass it as `content` so it is
+/// included in the signature. GET requests should pass `None`.
 pub fn sign_request(
     key: &KeyPair,
     origin: &str,
@@ -22,8 +65,9 @@ pub fn sign_request(
         obj["content"] = body.clone();
     }
 
-    let canonical = canonical_json(&obj);
-    let signature = key.sign(canonical.as_bytes());
+    let canonical =
+        CanonicalJson::from_value(&obj).expect("Request object should not contain floats");
+    let signature = key.sign(canonical.encode().as_bytes());
 
     format!(
         "X-Matrix origin=\"{origin}\",destination=\"{destination}\",key=\"{}\",sig=\"{signature}\"",
@@ -31,9 +75,16 @@ pub fn sign_request(
     )
 }
 
-/// Parse and verify an inbound `Authorization: X-Matrix` header.
+/// Parse an inbound `Authorization: X-Matrix` header.
 ///
-/// Returns `(origin, key_id, signature)` if the header is well-formed.
+/// Extracts the three key fields from the header value:
+///
+/// - **origin** -- the server that sent the request (e.g., `alice.com`)
+/// - **key_id** -- which signing key was used (e.g., `ed25519:abc123`)
+/// - **signature** -- the base64-encoded Ed25519 signature
+///
+/// Returns `None` if the header is missing the `X-Matrix` prefix or any of the
+/// three required fields.
 pub fn parse_x_matrix_header(header: &str) -> Option<(String, String, String)> {
     let header = header.strip_prefix("X-Matrix ")?;
 
@@ -65,6 +116,13 @@ pub fn parse_x_matrix_header(header: &str) -> Option<(String, String, String)> {
 }
 
 /// Verify an inbound federation request signature.
+///
+/// Reconstructs the same canonical JSON that the sending server signed (from the
+/// method, URI, origin, destination, and optional body), then verifies the provided
+/// base64 signature against the sender's public key.
+///
+/// Returns `true` if the signature is valid, `false` otherwise (including if the
+/// canonical JSON cannot be constructed or the signature is malformed).
 pub fn verify_request(
     public_key_bytes: &[u8; 32],
     origin: &str,
@@ -85,10 +143,12 @@ pub fn verify_request(
         obj["content"] = body.clone();
     }
 
-    let canonical = canonical_json(&obj);
-    maelstrom_core::signatures::keys::verify_signature(
+    let Ok(canonical) = CanonicalJson::from_value(&obj) else {
+        return false;
+    };
+    maelstrom_core::matrix::keys::verify_signature(
         public_key_bytes,
-        canonical.as_bytes(),
+        canonical.encode().as_bytes(),
         signature_b64,
     )
 }

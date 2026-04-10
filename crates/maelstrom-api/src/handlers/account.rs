@@ -1,15 +1,52 @@
+//! Account management -- whoami, password change, and deactivation.
+//!
+//! Implements the following Matrix Client-Server API endpoints
+//! ([spec: 5.7 Account](https://spec.matrix.org/v1.13/client-server-api/#account)):
+//!
+//! | Method | Path | Handler |
+//! |--------|------|---------|
+//! | `GET`  | `/_matrix/client/v3/account/whoami` | Token introspection |
+//! | `POST` | `/_matrix/client/v3/account/deactivate` | Permanently deactivate account |
+//! | `POST` | `/_matrix/client/v3/account/password` | Change password |
+//!
+//! # Whoami
+//!
+//! Returns the `user_id`, `device_id`, and `is_guest` flag associated with the
+//! access token used in the request. This is the canonical way for a client to
+//! confirm which account its token belongs to.
+//!
+//! # Password change (UIA required)
+//!
+//! The client must complete User-Interactive Authentication (either
+//! `m.login.password` with the current password, or `m.login.dummy` for
+//! passwordless accounts). On success the password hash is updated, and if
+//! `logout_devices` is true (the default) all other sessions are invalidated --
+//! only the device making the request survives.
+//!
+//! # Account deactivation (UIA required)
+//!
+//! Also requires UIA. Once deactivated, the user record is flagged, all devices
+//! and access tokens are removed, and future login attempts are rejected with
+//! `M_USER_DEACTIVATED`. Deactivation is currently irreversible.
+
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::handlers::util;
 use crate::state::AppState;
 
+/// Register all account management routes.
+///
+/// Routes:
+/// - `GET  /_matrix/client/v3/account/whoami` -- identify the token's owner
+/// - `POST /_matrix/client/v3/account/deactivate` -- permanently deactivate (UIA)
+/// - `POST /_matrix/client/v3/account/password` -- change password (UIA)
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_matrix/client/v3/account/whoami", get(whoami))
@@ -19,6 +56,10 @@ pub fn routes() -> Router<AppState> {
 
 // -- GET /account/whoami --
 
+/// Response for `GET /account/whoami`.
+///
+/// Tells the client which user and device the current access token belongs
+/// to, and whether the account was registered as a guest.
 #[derive(Serialize)]
 struct WhoamiResponse {
     user_id: String,
@@ -45,6 +86,10 @@ async fn whoami(
 
 // -- POST /account/deactivate --
 
+/// Request body for `POST /account/deactivate`.
+///
+/// Must include an `auth` block that completes UIA. After deactivation the
+/// account cannot be reused and all devices are destroyed.
 #[derive(Deserialize)]
 struct DeactivateRequest {
     auth: Option<DeactivateAuth>,
@@ -144,6 +189,12 @@ fn default_true() -> bool {
     true
 }
 
+/// Request body for `POST /account/password`.
+///
+/// Requires UIA via the `auth` block. The `new_password` is Argon2-hashed
+/// before storage. When `logout_devices` is true (the default), all sessions
+/// except the one making the request are invalidated and associated pushers
+/// are removed.
 #[derive(Deserialize)]
 struct ChangePasswordRequest {
     new_password: String,

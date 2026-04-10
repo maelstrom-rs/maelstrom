@@ -1,3 +1,30 @@
+//! Admin API for Maelstrom server management.
+//!
+//! This crate provides a dual-purpose admin interface:
+//!
+//! - **JSON API** -- Synapse-compatible REST endpoints under `/_maelstrom/admin/v1/`
+//!   for programmatic server management (user CRUD, room moderation, media purging,
+//!   federation diagnostics, and server health).
+//!
+//! - **SSR Dashboard** -- Server-side-rendered HTML pages under `/_maelstrom/admin/`
+//!   built with [Askama](https://docs.rs/askama) templates and served alongside
+//!   static CSS assets. This gives operators a browser-based overview without
+//!   requiring a separate frontend deployment.
+//!
+//! ## Authentication
+//!
+//! Every admin endpoint is guarded by the [`auth::AdminUser`] extractor, which
+//! validates the `Authorization: Bearer <token>` header exactly like the
+//! Client-Server API's `AuthenticatedUser` but additionally checks that the
+//! resolved user account has `is_admin = true`. Requests from non-admin users
+//! receive a `403 Forbidden` Matrix error.
+//!
+//! ## State
+//!
+//! All handlers share an [`AdminState`] that wraps a boxed `Storage` trait object,
+//! the server name, process uptime, and a mutable [`RetentionConfig`] that the
+//! media retention endpoint can update at runtime.
+
 pub mod auth;
 pub mod handlers;
 pub mod router;
@@ -5,7 +32,7 @@ pub mod templates;
 
 use std::sync::{Arc, Mutex};
 
-use maelstrom_core::identifiers::ServerName;
+use maelstrom_core::matrix::id::ServerName;
 use maelstrom_storage::traits::Storage;
 
 /// Media retention policy configuration.

@@ -1,3 +1,27 @@
+//! URL preview and OpenGraph metadata extraction.
+//!
+//! Implements the server-side URL preview required by
+//! `GET /_matrix/media/v3/preview_url`. When a client requests a preview,
+//! this module:
+//!
+//! 1. Fetches the URL with a 10-second timeout and up to 5 redirects, using
+//!    a `Maelstrom Matrix Homeserver` user-agent string.
+//!
+//! 2. Checks the `Content-Type` -- only `text/html` responses are parsed.
+//!    Non-HTML content (images, PDFs, etc.) returns empty [`OgMetadata`].
+//!
+//! 3. Scans the HTML for `<meta property="og:*">` tags and populates the
+//!    corresponding fields: `og:title`, `og:description`, `og:image`, `og:url`,
+//!    `og:type`, `og:site_name`. When `og:title` is absent, falls back to the
+//!    `<title>` element.
+//!
+//! 4. If an `og:image` URL is found, optionally resolves its byte size and
+//!    includes it as `matrix:image:size`.
+//!
+//! The design is deliberately best-effort: fetch failures, non-HTML responses,
+//! and missing OG tags all result in empty or partial metadata rather than
+//! errors, per the Matrix spec recommendation.
+
 use serde::Serialize;
 use tracing::{debug, warn};
 
@@ -14,6 +38,8 @@ pub struct OgMetadata {
     pub image: Option<String>,
     #[serde(rename = "og:url", skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(rename = "og:type", skip_serializing_if = "Option::is_none")]
+    pub og_type: Option<String>,
     #[serde(rename = "og:site_name", skip_serializing_if = "Option::is_none")]
     pub site_name: Option<String>,
     #[serde(rename = "matrix:image:size", skip_serializing_if = "Option::is_none")]
@@ -69,7 +95,36 @@ pub async fn fetch_og_metadata(url: &str) -> Result<OgMetadata, MediaError> {
         }
     };
 
-    Ok(extract_og_from_html(&body))
+    let mut meta = extract_og_from_html(&body);
+
+    // Try to get image size if og:image is present
+    if let Some(ref image_url) = meta.image {
+        // Resolve relative URLs
+        let full_url = if image_url.starts_with("http") {
+            image_url.clone()
+        } else if let Ok(base) = reqwest::Url::parse(url) {
+            base.join(image_url)
+                .map(|u| u.to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        if !full_url.is_empty()
+            && let Ok(img_resp) = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_default()
+                .head(&full_url)
+                .send()
+                .await
+            && let Some(len) = img_resp.content_length()
+        {
+            meta.image_size = Some(len);
+        }
+    }
+
+    Ok(meta)
 }
 
 /// Parse HTML and extract OpenGraph meta tags.
@@ -93,6 +148,7 @@ fn extract_og_from_html(html: &str) -> OgMetadata {
             "og:description" => meta.description = Some(content),
             "og:image" => meta.image = Some(content),
             "og:url" => meta.url = Some(content),
+            "og:type" => meta.og_type = Some(content),
             "og:site_name" => meta.site_name = Some(content),
             _ => {}
         }

@@ -8,6 +8,7 @@ license.workspace = true
 maelstrom-core = { workspace = true }
 maelstrom-storage = { workspace = true }
 maelstrom-media = { workspace = true }
+maelstrom-federation = { path = "../maelstrom-federation" }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tower = { workspace = true }
@@ -25,4 +26,6 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+urlencoding = "2"
+dashmap = { workspace = true }
 chitchat = { workspace = true }

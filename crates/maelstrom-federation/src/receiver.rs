@@ -1,14 +1,49 @@
+//! # Inbound Federation Transaction Processing
+//!
+//! This module handles the receiving side of federation: when a remote server sends
+//! us a transaction via `PUT /_matrix/federation/v1/send/{txnId}`, this code
+//! processes it.
+//!
+//! ## Transaction Structure
+//!
+//! An inbound transaction contains:
+//!
+//! - `origin` -- the server that sent the transaction
+//! - `origin_server_ts` -- when the transaction was created
+//! - `pdus` -- an array of Persistent Data Units (room events) to be stored
+//! - `edus` -- an array of Ephemeral Data Units (typing, presence, receipts, etc.)
+//!
+//! ## Processing Pipeline
+//!
+//! 1. **Transaction deduplication** -- if we have already processed a transaction with
+//!    the same `(origin, txnId)` pair, return a cached empty result immediately. This
+//!    prevents duplicate processing when a remote server retries.
+//!
+//! 2. **PDU processing** -- each PDU is validated, converted to a [`Pdu`] struct, and
+//!    stored. If the PDU is a state event (has a `state_key`), the room's current
+//!    state is updated. Already-known events (by event ID) are silently skipped.
+//!
+//! 3. **EDU processing** -- each EDU is dispatched by `edu_type`:
+//!    - `m.typing` -- updates the ephemeral typing state
+//!    - `m.presence` -- updates user presence status
+//!    - `m.receipt` -- stores read receipts
+//!    - `m.device_list_update` -- stores updated device keys for remote users
+//!
+//! 4. **Transaction recording** -- the `(origin, txnId)` pair is stored to support
+//!    deduplication on retries.
+
 use axum::extract::{Path, State};
 use axum::routing::put;
 use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::events::pdu::StoredEvent;
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::event::Pdu;
 
 use crate::FederationState;
 
+/// Build the receiver sub-router with the inbound transaction endpoint.
 pub fn routes() -> Router<FederationState> {
     Router::new().route(
         "/_matrix/federation/v1/send/{txnId}",
@@ -16,13 +51,22 @@ pub fn routes() -> Router<FederationState> {
     )
 }
 
+/// A federation transaction received from a remote server.
+///
+/// Contains batches of PDUs (persistent room events) and EDUs (ephemeral data like
+/// typing notifications). The `origin` identifies the sending server, and PDUs/EDUs
+/// default to empty arrays if omitted.
 #[derive(Deserialize)]
 struct Transaction {
+    /// The server name that originated this transaction.
     origin: String,
+    /// Timestamp when the transaction was created (informational, not used for ordering).
     #[allow(dead_code)]
     origin_server_ts: Option<u64>,
+    /// Persistent Data Units -- room events to be stored and processed.
     #[serde(default)]
     pdus: Vec<serde_json::Value>,
+    /// Ephemeral Data Units -- transient data (typing, presence, receipts, device updates).
     #[serde(default)]
     edus: Vec<serde_json::Value>,
 }
@@ -130,8 +174,8 @@ async fn process_pdu(
         return Ok(());
     }
 
-    // Build StoredEvent from PDU
-    let stored = StoredEvent {
+    // Build Pdu from incoming event
+    let stored = Pdu {
         event_id: event_id.to_string(),
         room_id: room_id.to_string(),
         sender: sender.to_string(),
@@ -186,6 +230,13 @@ async fn process_pdu(
 }
 
 /// Process an inbound EDU (Ephemeral Data Unit).
+///
+/// EDUs carry transient information that is not persisted as room events.
+/// Supported types:
+/// - `m.typing` -- a user started or stopped typing in a room
+/// - `m.presence` -- a batch of presence updates for remote users
+/// - `m.receipt` -- read receipts for events in shared rooms
+/// - `m.device_list_update` -- a remote user's device keys changed (important for E2EE)
 async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
     let edu_type = edu
         .get("edu_type")
@@ -244,7 +295,7 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
                                 debug!(room_id = %room_id, user_id = %user_id, event_id = %event_id, "Federation receipt EDU");
                                 let _ = state
                                     .storage()
-                                    .set_receipt(user_id, room_id, "m.read", event_id)
+                                    .set_receipt(user_id, room_id, "m.read", event_id, None)
                                     .await;
                             }
                         }
@@ -254,7 +305,6 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
         }
         "m.device_list_update" => {
             // Device list updates inform us a remote user's device keys changed.
-            // We invalidate our cache by storing the updated keys if provided.
             let user_id = content
                 .get("user_id")
                 .and_then(|u| u.as_str())
@@ -268,6 +318,19 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
                 let _ = state
                     .storage()
                     .set_device_keys(user_id, device_id, keys)
+                    .await;
+            }
+            // Record the change position so sync's device_lists.changed picks it up
+            if !user_id.is_empty() {
+                let change_pos = state.storage().current_stream_position().await.unwrap_or(0);
+                let _ = state
+                    .storage()
+                    .set_account_data(
+                        user_id,
+                        None,
+                        "_maelstrom.device_change_pos",
+                        &serde_json::json!({"pos": change_pos}),
+                    )
                     .await;
             }
         }

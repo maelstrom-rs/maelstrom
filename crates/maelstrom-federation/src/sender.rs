@@ -1,20 +1,60 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+//! # Outbound Federation Transaction Sender
+//!
+//! When a local user sends a message to a room with remote participants, the event
+//! needs to be delivered to every remote server that has members in that room. This
+//! module handles that delivery with queuing, batching, and retry.
+//!
+//! ## Per-Destination Queuing
+//!
+//! Events are queued separately for each destination server using a [`DashMap`] of
+//! `VecDeque`s. PDUs and EDUs have separate queues. This ensures that a slow or
+//! unreachable server does not block delivery to other servers.
+//!
+//! ## Batching
+//!
+//! The sender drains up to **50 PDUs** and **100 EDUs** per transaction. These are
+//! combined into a single `PUT /_matrix/federation/v1/send/{txnId}` request. This
+//! matches the Matrix spec recommendation for transaction sizes.
+//!
+//! ## Exponential Backoff
+//!
+//! When a transaction fails (network error, remote 5xx, etc.), the PDUs are pushed
+//! back to the front of the queue and the destination enters exponential backoff:
+//!
+//! - First failure: wait **1 second**
+//! - Each subsequent failure: **double** the wait time
+//! - Maximum wait: **1 hour**
+//! - On success: backoff is cleared immediately
+//!
+//! ## Background Loop
+//!
+//! The [`TransactionSender::run`] method is designed to be spawned as a long-lived
+//! tokio task. It polls all queues every 200ms, skipping destinations that are in
+//! backoff.
 
-use maelstrom_core::events::pdu::{StoredEvent, timestamp_ms};
+use std::collections::{HashMap, VecDeque};
+
+use dashmap::DashMap;
+use maelstrom_core::matrix::event::{Pdu, timestamp_ms};
 use tracing::{debug, info, warn};
 
 use crate::client::FederationClient;
 
-/// Outbound federation transaction sender.
+/// Outbound federation transaction sender with per-destination queuing and retry.
 ///
-/// Queues PDUs per destination server, batches them into transactions,
-/// and sends with exponential backoff retry.
+/// Maintains separate PDU and EDU queues for each destination server, batches them
+/// into federation transactions, and retries with exponential backoff on failure.
+///
+/// # Usage
+///
+/// Create with [`TransactionSender::new`], then spawn the [`run`](TransactionSender::run)
+/// method as a background task. Use [`queue_pdu`](TransactionSender::queue_pdu) and
+/// [`queue_edu`](TransactionSender::queue_edu) to enqueue events for delivery.
 pub struct TransactionSender {
     client: FederationClient,
     server_name: String,
-    queues: Mutex<HashMap<String, VecDeque<serde_json::Value>>>,
-    edu_queues: Mutex<HashMap<String, VecDeque<serde_json::Value>>>,
+    queues: DashMap<String, VecDeque<serde_json::Value>>,
+    edu_queues: DashMap<String, VecDeque<serde_json::Value>>,
 }
 
 impl TransactionSender {
@@ -22,20 +62,22 @@ impl TransactionSender {
         Self {
             client,
             server_name,
-            queues: Mutex::new(HashMap::new()),
-            edu_queues: Mutex::new(HashMap::new()),
+            queues: DashMap::new(),
+            edu_queues: DashMap::new(),
         }
     }
 
     /// Queue a PDU for sending to a destination server.
-    pub fn queue_pdu(&self, destination: &str, event: &StoredEvent) {
+    ///
+    /// The event is serialized to federation JSON format and appended to the
+    /// destination's queue. Events addressed to this server are silently dropped.
+    pub fn queue_pdu(&self, destination: &str, event: &Pdu) {
         if destination == self.server_name {
             return; // Don't send to ourselves
         }
 
-        let pdu = event.to_federation_event();
-        let mut queues = self.queues.lock().unwrap();
-        queues
+        let pdu = event.to_federation_json();
+        self.queues
             .entry(destination.to_string())
             .or_default()
             .push_back(pdu);
@@ -43,20 +85,27 @@ impl TransactionSender {
         debug!(destination = %destination, event_id = %event.event_id, "Queued PDU for federation");
     }
 
-    /// Queue an EDU for sending to a destination server.
+    /// Queue an EDU (Ephemeral Data Unit) for sending to a destination server.
+    ///
+    /// EDUs include typing notifications, presence updates, read receipts, and
+    /// device list updates. They are batched alongside PDUs in the next transaction.
     pub fn queue_edu(&self, destination: &str, edu: serde_json::Value) {
         if destination == self.server_name {
             return;
         }
 
-        let mut queues = self.edu_queues.lock().unwrap();
-        queues
+        self.edu_queues
             .entry(destination.to_string())
             .or_default()
             .push_back(edu);
     }
 
-    /// Run the sender loop. Call this as a spawned task.
+    /// Run the sender loop. Call this as a spawned tokio task.
+    ///
+    /// This is a long-lived loop that polls every 200ms, draining up to 50 PDUs and
+    /// 100 EDUs per destination into a single federation transaction. On failure,
+    /// events are re-queued and the destination enters exponential backoff
+    /// (1s, 2s, 4s, ... up to 1 hour).
     pub async fn run(self: std::sync::Arc<Self>) {
         info!("Federation transaction sender started");
 
@@ -66,16 +115,15 @@ impl TransactionSender {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
             let destinations: Vec<String> = {
-                let pdu_queues = self.queues.lock().unwrap();
-                let edu_queues = self.edu_queues.lock().unwrap();
-                let mut dests: std::collections::HashSet<String> = pdu_queues
+                let mut dests: std::collections::HashSet<String> = self
+                    .queues
                     .iter()
-                    .filter(|(_, q)| !q.is_empty())
-                    .map(|(dest, _)| dest.clone())
+                    .filter(|entry| !entry.value().is_empty())
+                    .map(|entry| entry.key().clone())
                     .collect();
-                for (dest, q) in edu_queues.iter() {
-                    if !q.is_empty() {
-                        dests.insert(dest.clone());
+                for entry in self.edu_queues.iter() {
+                    if !entry.value().is_empty() {
+                        dests.insert(entry.key().clone());
                     }
                 }
                 dests.into_iter().collect()
@@ -91,26 +139,22 @@ impl TransactionSender {
                 }
 
                 // Drain up to 50 PDUs
-                let pdus: Vec<serde_json::Value> = {
-                    let mut queues = self.queues.lock().unwrap();
-                    if let Some(queue) = queues.get_mut(&dest) {
+                let pdus: Vec<serde_json::Value> =
+                    if let Some(mut queue) = self.queues.get_mut(&dest) {
                         let count = queue.len().min(50);
                         queue.drain(..count).collect()
                     } else {
                         continue;
-                    }
-                };
+                    };
 
                 // Drain up to 100 EDUs
-                let edus: Vec<serde_json::Value> = {
-                    let mut queues = self.edu_queues.lock().unwrap();
-                    if let Some(queue) = queues.get_mut(&dest) {
+                let edus: Vec<serde_json::Value> =
+                    if let Some(mut queue) = self.edu_queues.get_mut(&dest) {
                         let count = queue.len().min(100);
                         queue.drain(..count).collect()
                     } else {
                         Vec::new()
-                    }
-                };
+                    };
 
                 if pdus.is_empty() && edus.is_empty() {
                     continue;
@@ -136,8 +180,7 @@ impl TransactionSender {
 
                         // Re-queue PDUs
                         {
-                            let mut queues = self.queues.lock().unwrap();
-                            let queue = queues.entry(dest.clone()).or_default();
+                            let mut queue = self.queues.entry(dest.clone()).or_default();
                             for pdu in pdus.into_iter().rev() {
                                 queue.push_front(pdu);
                             }

@@ -1,3 +1,29 @@
+//! Image thumbnail generation.
+//!
+//! Generates thumbnails from uploaded media on the fly, as required by
+//! `GET /_matrix/media/v3/thumbnail/{serverName}/{mediaId}`.
+//!
+//! ## Resize methods
+//!
+//! The Matrix spec defines two resize methods, both implemented here via the
+//! `image` crate:
+//!
+//! - [`ResizeMethod::Scale`] -- Fit the image within the requested `width x height`
+//!   while preserving the original aspect ratio. The output may be smaller than
+//!   the requested dimensions on one axis.
+//!
+//! - [`ResizeMethod::Crop`] -- Scale the image so it completely fills the requested
+//!   dimensions, then center-crop to the exact size. Useful for square avatars.
+//!
+//! ## Supported formats
+//!
+//! Input: PNG, JPEG, GIF, and WebP (detected via magic bytes, not file extension).
+//! Unsupported formats (SVG, TIFF, etc.) return `None` so the caller can serve
+//! the original file instead.
+//!
+//! Output is always PNG, returned as raw bytes in a [`ThumbnailResult`] alongside
+//! the `image/png` content type.
+
 use bytes::Bytes;
 use image::ImageFormat;
 use image::imageops::FilterType;

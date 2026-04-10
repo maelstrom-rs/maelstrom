@@ -7,30 +7,18 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl \
+    ca-certificates curl openssl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/maelstrom /usr/local/bin/maelstrom
+COPY scripts/complement-start.sh /start.sh
+RUN chmod +x /start.sh
 
 EXPOSE 8008 8448
 
-# Generate config from Complement env vars — no [media] section (optional)
-ENTRYPOINT ["/bin/sh", "-c", "\
-    mkdir -p /etc/maelstrom && \
-    cat > /etc/maelstrom/config.toml <<TOML\n\
-[server]\n\
-bind_address = \"0.0.0.0:8008\"\n\
-server_name = \"${SERVER_NAME:-localhost}\"\n\
-public_base_url = \"http://localhost:8008\"\n\
-\n\
-[database]\n\
-endpoint = \"mem://\"\n\
-namespace = \"maelstrom\"\n\
-database = \"maelstrom\"\n\
-username = \"root\"\n\
-password = \"root\"\n\
-TOML\n\
-    MAELSTROM_CONFIG=/etc/maelstrom/config.toml exec maelstrom"]
+ENV MAELSTROM_CONFIG=/etc/maelstrom/config.toml
+
+ENTRYPOINT ["/start.sh"]
 
 HEALTHCHECK --interval=1s --timeout=2s --retries=30 \
     CMD curl -sf http://localhost:8008/_health/live || exit 1

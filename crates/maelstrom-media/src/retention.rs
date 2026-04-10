@@ -1,3 +1,27 @@
+//! Background media retention sweep and cleanup.
+//!
+//! Implements a configurable retention policy that automatically purges old media
+//! from both the S3 object store and the database metadata table.
+//!
+//! ## How it works
+//!
+//! [`spawn_retention_task`] launches a long-lived Tokio task that loops on a
+//! fixed interval (`sweep_interval_secs`, default 1 hour). Each sweep:
+//!
+//! 1. Computes a cutoff timestamp: `now - max_age_days`.
+//! 2. Queries the database for up to `batch_size` media records older than the cutoff.
+//! 3. For each record, deletes the S3 object and then removes the metadata row.
+//!
+//! If `max_age_days` is 0 (the default), the task logs a message and exits
+//! immediately -- retention is disabled.
+//!
+//! ## Configuration
+//!
+//! [`RetentionConfig`] is typically populated from the `[media]` section of the
+//! TOML config file. It can also be updated at runtime via the admin API
+//! (`PUT /_maelstrom/admin/v1/media/retention`), though the background task
+//! itself reads the config once at startup.
+
 use chrono::Utc;
 use maelstrom_storage::traits::Storage;
 use tracing::{debug, error, info, warn};

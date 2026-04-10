@@ -1,4 +1,4 @@
-use maelstrom_core::identifiers::*;
+use maelstrom_core::matrix::id::*;
 
 #[test]
 fn test_user_id_parse_valid() {

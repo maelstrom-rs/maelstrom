@@ -1,9 +1,27 @@
+//! Admin user management endpoints.
+//!
+//! Provides CRUD and lifecycle operations for user accounts. All endpoints
+//! require admin authentication.
+//!
+//! ## Routes
+//!
+//! | Method   | Path                                              | Operation           |
+//! |----------|---------------------------------------------------|---------------------|
+//! | `GET`    | `/_maelstrom/admin/v1/users`                      | List all users      |
+//! | `GET`    | `/_maelstrom/admin/v1/users/{userId}`             | Get user details    |
+//! | `POST`   | `/_maelstrom/admin/v1/users/{userId}/deactivate`  | Deactivate account  |
+//! | `POST`   | `/_maelstrom/admin/v1/users/{userId}/reactivate`  | Reactivate account  |
+//! | `PUT`    | `/_maelstrom/admin/v1/users/{userId}/admin`       | Grant admin flag    |
+//! | `DELETE` | `/_maelstrom/admin/v1/users/{userId}/admin`       | Revoke admin flag   |
+//! | `POST`   | `/_maelstrom/admin/v1/users/{userId}/reset-password` | Reset password   |
+//! | `GET`    | `/_maelstrom/admin/v1/users/{userId}/devices`     | List user devices   |
+
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use maelstrom_core::error::MatrixError;
+use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_storage::traits::StorageError;
 
 use crate::AdminState;
@@ -71,10 +89,10 @@ async fn get_user(
     let devices = state
         .storage()
         .list_devices(
-            &maelstrom_core::identifiers::UserId::parse(&user_id).unwrap_or_else(|_| {
-                maelstrom_core::identifiers::UserId::new(
+            &maelstrom_core::matrix::id::UserId::parse(&user_id).unwrap_or_else(|_| {
+                maelstrom_core::matrix::id::UserId::new(
                     localpart,
-                    &maelstrom_core::identifiers::ServerName::new("localhost"),
+                    &maelstrom_core::matrix::id::ServerName::new("localhost"),
                 )
             }),
         )
@@ -212,7 +230,7 @@ async fn list_devices(
     _admin: AdminUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let uid = maelstrom_core::identifiers::UserId::parse(&user_id)
+    let uid = maelstrom_core::matrix::id::UserId::parse(&user_id)
         .map_err(|_| MatrixError::bad_json("Invalid user ID"))?;
 
     let devices = state

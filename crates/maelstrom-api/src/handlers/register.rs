@@ -1,3 +1,49 @@
+//! User registration and username availability.
+//!
+//! Implements the following Matrix Client-Server API endpoints
+//! ([spec: 5.6 Registration](https://spec.matrix.org/v1.13/client-server-api/#registration)):
+//!
+//! | Method | Path | Handler |
+//! |--------|------|---------|
+//! | `POST` | `/_matrix/client/v3/register` | Create a new account |
+//! | `GET`  | `/_matrix/client/v3/register/available` | Check username availability |
+//! | `GET`  | `/_synapse/admin/v1/register` | Get nonce (Synapse-compat admin reg) |
+//! | `POST` | `/_synapse/admin/v1/register` | Admin registration with shared secret |
+//!
+//! # User-Interactive Authentication (UIA)
+//!
+//! Registration uses the Matrix UIA protocol. On the first `POST /register`
+//! without an `auth` block, the server returns **HTTP 401** with available
+//! flows. Currently the only supported flow is the single-stage `m.login.dummy`,
+//! which amounts to open registration -- the client just re-sends the request
+//! with `auth: { "type": "m.login.dummy" }`.
+//!
+//! # Username validation
+//!
+//! Usernames (localparts) must:
+//! - Be non-empty and at most 255 characters
+//! - Contain only lowercase ASCII letters, digits, and the characters `._=-/`
+//! - Be unique (case-insensitive, since the server lowercases on arrival)
+//!
+//! If no username is provided the server generates a random one.
+//!
+//! # `inhibit_login`
+//!
+//! When `inhibit_login` is `true` in the request the server creates the account
+//! but does **not** create a device or issue an access token. The response will
+//! contain only `user_id`.
+//!
+//! # First-user admin promotion
+//!
+//! The very first account registered on a fresh server is automatically granted
+//! admin privileges.
+//!
+//! # Complement admin registration
+//!
+//! For integration testing with Complement, the Synapse-compatible shared-secret
+//! registration endpoint is supported at `/_synapse/admin/v1/register`. In
+//! dev/test mode HMAC verification is skipped.
+
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -5,14 +51,20 @@ use axum::{Json, Router};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use maelstrom_core::error::MatrixError;
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 use maelstrom_storage::traits::{DeviceRecord, UserRecord};
 
 use crate::extractors::MatrixJson;
 use crate::handlers::util;
 use crate::state::AppState;
 
+/// Register all registration and username-availability routes.
+///
+/// Routes:
+/// - `POST /_matrix/client/v3/register` -- UIA-gated account creation
+/// - `GET  /_matrix/client/v3/register/available` -- username availability check
+/// - `GET/POST /_synapse/admin/v1/register` -- Synapse-compatible admin registration
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/_matrix/client/v3/register", post(post_register))
@@ -26,6 +78,7 @@ pub fn routes() -> Router<AppState> {
 
 // -- GET /register/available --
 
+/// Query parameters for `GET /register/available`.
 #[derive(Deserialize)]
 struct AvailableQuery {
     username: String,
@@ -57,6 +110,12 @@ async fn get_available(
 
 // -- POST /register --
 
+/// Request body for `POST /register`.
+///
+/// The client sends this twice in the UIA flow: first without `auth` (to get
+/// the 401 with available stages), then again with `auth.type` set to
+/// `"m.login.dummy"`. The `password` is hashed with Argon2 before storage.
+/// When `inhibit_login` is true, no device or access token is created.
 #[derive(Deserialize)]
 struct RegisterRequest {
     auth: Option<AuthData>,
@@ -76,6 +135,10 @@ struct AuthData {
     session: Option<String>,
 }
 
+/// Successful registration response.
+///
+/// Always contains `user_id`. When `inhibit_login` was false (the default),
+/// also contains `access_token` and `device_id` for immediate session use.
 #[derive(Serialize)]
 struct RegisterResponse {
     user_id: String,
@@ -95,7 +158,7 @@ async fn post_register(
         Some(_) => {
             return Err(MatrixError::new(
                 StatusCode::BAD_REQUEST,
-                maelstrom_core::error::ErrorCode::Unknown,
+                maelstrom_core::matrix::error::ErrorCode::Unknown,
                 "Unsupported auth type",
             ));
         }

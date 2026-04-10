@@ -1,34 +1,91 @@
+//! Storage trait definitions and shared record types.
+//!
+//! This is the most important file for understanding how Maelstrom persists data.
+//! Everything in this module is backend-agnostic -- no SurrealDB types leak in.
+//!
+//! # Trait hierarchy
+//!
+//! The top-level [`Storage`] trait is a super-trait that combines every sub-trait:
+//!
+//! | Sub-trait            | Responsibility                                            |
+//! |----------------------|-----------------------------------------------------------|
+//! | [`UserStore`]        | User accounts and profiles (create, deactivate, search).  |
+//! | [`DeviceStore`]      | Devices and access tokens (login sessions).               |
+//! | [`RoomStore`]        | Room metadata, membership, aliases, visibility, upgrades. |
+//! | [`EventStore`]       | PDU storage, room state map, stream positions, search.    |
+//! | [`ReceiptStore`]     | Read receipts (per-room, per-thread).                     |
+//! | [`KeyStore`]         | E2EE device keys, one-time keys, cross-signing keys.      |
+//! | [`ToDeviceStore`]    | Queued to-device messages for offline delivery.            |
+//! | [`AccountDataStore`] | Per-user and per-room account data blobs.                 |
+//! | [`MediaStore`]       | Media metadata (the blobs live in object storage).        |
+//! | [`FederationKeyStore`] | Server signing keys and cached remote server keys.      |
+//! | [`RelationStore`]    | Event relations (threads, reactions, edits, reports).      |
+//! | [`HealthCheck`]      | Liveness probe for the storage backend.                   |
+//!
+//! A blanket `impl<T> Storage for T` means any struct that implements every sub-trait
+//! automatically satisfies `Storage`.
+//!
+//! # Record types
+//!
+//! Each sub-trait works with plain Rust structs (e.g. [`UserRecord`], [`DeviceRecord`]).
+//! These are serialization-friendly (`Serialize + Deserialize`) so they can round-trip
+//! through any backend.  They intentionally use simple types (`String`, `Option<String>`,
+//! `i64`) instead of Matrix-specific newtypes to keep the storage layer decoupled.
+//!
+//! # Error handling
+//!
+//! All methods return [`StorageResult<T>`], which wraps [`StorageError`].  The error
+//! variants are deliberately coarse so that callers can pattern-match without knowing
+//! which database is behind the trait.
+
 use async_trait::async_trait;
-use maelstrom_core::events::pdu::StoredEvent;
-use maelstrom_core::identifiers::{DeviceId, UserId};
+use maelstrom_core::matrix::event::Pdu;
+use maelstrom_core::matrix::id::{DeviceId, UserId};
 use serde::{Deserialize, Serialize};
 
 /// Result type for storage operations.
 pub type StorageResult<T> = Result<T, StorageError>;
 
 /// Errors that can occur during storage operations.
+///
+/// These variants are intentionally coarse-grained.  Handlers translate them into
+/// the appropriate Matrix error codes (e.g. `NotFound` -> `M_NOT_FOUND`).
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    /// The requested record does not exist.
+    /// Mapped to HTTP 404 / `M_NOT_FOUND` in handlers.
     #[error("Record not found")]
     NotFound,
 
+    /// A uniqueness constraint was violated (e.g. duplicate username or alias).
+    /// Mapped to HTTP 409 / `M_UNKNOWN` or `M_EXCLUSIVE` depending on context.
     #[error("Duplicate record: {0}")]
     Duplicate(String),
 
+    /// The database could not be reached.  Usually means SurrealDB is down or
+    /// the endpoint is misconfigured.
     #[error("Connection failed: {0}")]
     Connection(String),
 
+    /// A query executed but returned an error (syntax, permission, constraint).
     #[error("Query failed: {0}")]
     Query(String),
 
+    /// A value could not be serialized to/from the storage format.
     #[error("Serialization error: {0}")]
     Serialization(String),
 
+    /// Catch-all for unexpected failures.
     #[error("Internal error: {0}")]
     Internal(String),
 }
 
 /// A stored device record.
+///
+/// Each device represents a single login session.  The `access_token` is the
+/// bearer token the client sends on every request; `device_id` is the
+/// client-visible identifier used for E2EE key management and to-device
+/// messaging.  A user may have many devices (phone, desktop, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRecord {
     pub device_id: String,
@@ -39,6 +96,12 @@ pub struct DeviceRecord {
 }
 
 /// A stored user record.
+///
+/// Represents a registered Matrix user account.  The `localpart` is the portion
+/// before the colon in `@alice:example.com`.  `password_hash` is `None` for
+/// appservice-managed or SSO-only accounts.  The `is_guest` flag tracks
+/// anonymous guest registrations, and `is_deactivated` soft-deletes an account
+/// without removing historical events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRecord {
     pub localpart: String,
@@ -50,6 +113,10 @@ pub struct UserRecord {
 }
 
 /// A user profile.
+///
+/// The public-facing display name and avatar for a user, served by the
+/// `/profile` endpoint and included in membership events.  Both fields are
+/// optional because a user can register without setting either.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileRecord {
     pub display_name: Option<String>,
@@ -57,6 +124,11 @@ pub struct ProfileRecord {
 }
 
 /// A room record.
+///
+/// Core metadata about a room.  `version` is the room version string (e.g.
+/// `"11"`), which determines the event format and state resolution algorithm.
+/// `creator` is the fully-qualified Matrix user ID of the room creator.
+/// `is_direct` indicates a 1:1 direct message room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomRecord {
     pub room_id: String,
@@ -66,6 +138,10 @@ pub struct RoomRecord {
 }
 
 /// A public room listing entry.
+///
+/// Returned by the room directory (`/publicRooms`) endpoint.  Aggregates
+/// metadata from the room record and its current state events (name, topic,
+/// avatar, canonical alias) along with computed values like `num_joined_members`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicRoom {
     pub room_id: String,
@@ -79,6 +155,10 @@ pub struct PublicRoom {
 }
 
 /// User account storage operations.
+///
+/// Covers account creation, password management, admin flags, deactivation,
+/// profile reads/writes, and user directory search.  The `localpart` is the
+/// canonical key for a user (the part before the colon in `@alice:hs`).
 #[async_trait]
 pub trait UserStore: Send + Sync {
     async fn create_user(&self, user: &UserRecord) -> StorageResult<()>;
@@ -91,9 +171,21 @@ pub trait UserStore: Send + Sync {
     async fn get_profile(&self, localpart: &str) -> StorageResult<ProfileRecord>;
     async fn set_display_name(&self, localpart: &str, name: Option<&str>) -> StorageResult<()>;
     async fn set_avatar_url(&self, localpart: &str, url: Option<&str>) -> StorageResult<()>;
+
+    /// Search users by display name or user ID. Returns (localpart, display_name, avatar_url).
+    async fn search_users(
+        &self,
+        search_term: &str,
+        limit: usize,
+    ) -> StorageResult<Vec<(String, Option<String>, Option<String>)>>;
 }
 
 /// Device and access token storage operations.
+///
+/// A "device" in Matrix is a login session identified by `(user_id, device_id)`.
+/// This trait manages the full lifecycle: creation at login, token lookup on
+/// every authenticated request, display name updates, and bulk removal at
+/// logout / password change.
 #[async_trait]
 pub trait DeviceStore: Send + Sync {
     async fn create_device(&self, device: &DeviceRecord) -> StorageResult<()>;
@@ -120,6 +212,11 @@ pub trait DeviceStore: Send + Sync {
 }
 
 /// Room storage operations.
+///
+/// Handles room metadata, membership state (join/invite/leave/ban),
+/// room aliases, public room directory listings, room forgetting, and
+/// room upgrade chains.  In the SurrealDB backend, membership is stored
+/// as graph edges (`user ->member_of-> room`) enabling efficient traversal.
 #[async_trait]
 pub trait RoomStore: Send + Sync {
     async fn create_room(&self, room: &RoomRecord) -> StorageResult<()>;
@@ -166,13 +263,19 @@ pub trait RoomStore: Send + Sync {
 }
 
 /// Event storage operations.
+///
+/// The heart of a Matrix server's persistence.  Events (PDUs) are the atomic
+/// unit of data in Matrix.  This trait stores them, maintains the current
+/// room state map, provides pagination (forward/backward) for `/messages`,
+/// incremental sync via stream positions, transaction-ID deduplication,
+/// full-text search, and redaction.
 #[async_trait]
 pub trait EventStore: Send + Sync {
     /// Store an event and return its stream position.
-    async fn store_event(&self, event: &StoredEvent) -> StorageResult<i64>;
+    async fn store_event(&self, event: &Pdu) -> StorageResult<i64>;
 
     /// Get an event by event_id.
-    async fn get_event(&self, event_id: &str) -> StorageResult<StoredEvent>;
+    async fn get_event(&self, event_id: &str) -> StorageResult<Pdu>;
 
     /// Get events in a room, ordered by stream_position, with pagination.
     /// `from` is exclusive (events after this position), `dir` is "f" (forward) or "b" (backward).
@@ -182,10 +285,10 @@ pub trait EventStore: Send + Sync {
         from: i64,
         limit: usize,
         dir: &str,
-    ) -> StorageResult<Vec<StoredEvent>>;
+    ) -> StorageResult<Vec<Pdu>>;
 
     /// Get all events across all rooms since a stream position (for incremental sync).
-    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<StoredEvent>>;
+    async fn get_events_since(&self, since: i64) -> StorageResult<Vec<Pdu>>;
 
     /// Update the current room state map for a state event.
     async fn set_room_state(
@@ -197,7 +300,7 @@ pub trait EventStore: Send + Sync {
     ) -> StorageResult<()>;
 
     /// Get the current state events for a room.
-    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<StoredEvent>>;
+    async fn get_current_state(&self, room_id: &str) -> StorageResult<Vec<Pdu>>;
 
     /// Get a specific state event from the current room state.
     async fn get_state_event(
@@ -205,7 +308,7 @@ pub trait EventStore: Send + Sync {
         room_id: &str,
         event_type: &str,
         state_key: &str,
-    ) -> StorageResult<StoredEvent>;
+    ) -> StorageResult<Pdu>;
 
     /// Get a state event as it was at a given stream position (for departed rooms).
     async fn get_state_event_at(
@@ -214,7 +317,7 @@ pub trait EventStore: Send + Sync {
         event_type: &str,
         state_key: &str,
         at_position: i64,
-    ) -> StorageResult<StoredEvent>;
+    ) -> StorageResult<Pdu>;
 
     /// Get the next stream position (atomically incremented).
     async fn next_stream_position(&self) -> StorageResult<i64>;
@@ -226,12 +329,18 @@ pub trait EventStore: Send + Sync {
     async fn store_txn_id(
         &self,
         device_id: &str,
+        room_id: &str,
         txn_id: &str,
         event_id: &str,
     ) -> StorageResult<()>;
 
     /// Look up an event_id by txn_id for deduplication.
-    async fn get_txn_event(&self, device_id: &str, txn_id: &str) -> StorageResult<Option<String>>;
+    async fn get_txn_event(
+        &self,
+        device_id: &str,
+        room_id: &str,
+        txn_id: &str,
+    ) -> StorageResult<Option<String>>;
 
     /// Full-text search across message events in the given rooms.
     /// Returns events matching the query, ordered by relevance.
@@ -240,13 +349,17 @@ pub trait EventStore: Send + Sync {
         room_ids: &[String],
         query: &str,
         limit: usize,
-    ) -> StorageResult<Vec<StoredEvent>>;
+    ) -> StorageResult<Vec<Pdu>>;
 
     /// Redact an event — clear its content to `{}`.
     async fn redact_event(&self, event_id: &str) -> StorageResult<()>;
 }
 
 /// Read receipt storage.
+///
+/// Tracks per-user, per-room, per-thread read receipts.  Receipts are
+/// upserted (one active receipt per user/room/type/thread combination)
+/// and bulk-fetched per room for sync responses.
 #[async_trait]
 pub trait ReceiptStore: Send + Sync {
     async fn set_receipt(
@@ -255,20 +368,34 @@ pub trait ReceiptStore: Send + Sync {
         room_id: &str,
         receipt_type: &str,
         event_id: &str,
+        thread_id: Option<&str>,
     ) -> StorageResult<()>;
     async fn get_receipts(&self, room_id: &str) -> StorageResult<Vec<ReceiptRecord>>;
 }
 
 /// Receipt record.
+///
+/// Represents a single read receipt.  `receipt_type` is typically `"m.read"`
+/// or `"m.read.private"`.  `thread_id` is `Some` when the receipt applies to
+/// a specific thread rather than the room timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptRecord {
     pub user_id: String,
     pub receipt_type: String,
     pub event_id: String,
     pub ts: u64,
+    pub thread_id: Option<String>,
 }
 
-/// E2EE key storage.
+/// End-to-end encryption (E2EE) key storage.
+///
+/// Manages the three key families required by the Matrix E2EE spec:
+///
+/// * **Device keys** -- long-lived identity keys uploaded once per device.
+/// * **One-time keys** -- ephemeral pre-keys claimed during Olm session setup;
+///   each key is deleted after a single claim.
+/// * **Cross-signing keys** -- master, self-signing, and user-signing keys
+///   that form the cross-signing trust chain.
 #[async_trait]
 pub trait KeyStore: Send + Sync {
     /// Store/update device keys for a user's device.
@@ -317,6 +444,11 @@ pub trait KeyStore: Send + Sync {
 }
 
 /// To-device message storage.
+///
+/// To-device messages are point-to-point events delivered outside of any room
+/// (e.g. Olm key-exchange messages, verification requests).  Messages are
+/// queued per-device, delivered during `/sync`, and deleted once the client
+/// acknowledges receipt via the `since` token.
 #[async_trait]
 pub trait ToDeviceStore: Send + Sync {
     /// Store a to-device message for delivery.
@@ -347,6 +479,11 @@ pub trait ToDeviceStore: Send + Sync {
 }
 
 /// Account data storage (global and per-room).
+///
+/// Account data is arbitrary JSON the client stores server-side, keyed by
+/// `(user_id, room_id?, data_type)`.  Global account data has no room ID.
+/// Common types include `m.direct` (DM room mapping), `m.push_rules`,
+/// and `m.fully_read` (per-room read marker).
 #[async_trait]
 pub trait AccountDataStore: Send + Sync {
     async fn set_account_data(
@@ -362,9 +499,35 @@ pub trait AccountDataStore: Send + Sync {
         room_id: Option<&str>,
         data_type: &str,
     ) -> StorageResult<serde_json::Value>;
+
+    /// Get all global account data for a user (excluding internal _maelstrom.* keys).
+    async fn get_all_account_data(
+        &self,
+        user_id: &str,
+    ) -> StorageResult<Vec<(String, serde_json::Value)>>;
+
+    /// Get all per-room account data for a user in a given room.
+    async fn get_all_room_account_data(
+        &self,
+        user_id: &str,
+        room_id: &str,
+    ) -> StorageResult<Vec<(String, serde_json::Value)>>;
+
+    /// Delete account data for a user (global or per-room).
+    async fn delete_account_data(
+        &self,
+        user_id: &str,
+        room_id: Option<&str>,
+        data_type: &str,
+    ) -> StorageResult<()>;
 }
 
 /// Media metadata record.
+///
+/// Stores metadata about an uploaded file.  The actual binary content lives
+/// in object storage (RustFS / S3); only the `s3_key` reference is kept here.
+/// `quarantined` allows admins to suppress access to abusive content without
+/// deleting the underlying object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaRecord {
     pub media_id: String,
@@ -379,6 +542,10 @@ pub struct MediaRecord {
 }
 
 /// Media metadata storage.
+///
+/// CRUD operations for media metadata.  Upload/download of the actual bytes
+/// is handled separately by the media service (RustFS); this trait only
+/// tracks the metadata and the S3 key that links to the blob.
 #[async_trait]
 pub trait MediaStore: Send + Sync {
     /// Store media metadata after upload.
@@ -411,6 +578,10 @@ pub trait MediaStore: Send + Sync {
 }
 
 /// A server signing key record.
+///
+/// This server's own ed25519 signing key pair, used to sign federation
+/// requests and events.  `valid_until` controls key rotation; expired keys
+/// are kept for verification of old signatures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerKeyRecord {
     pub key_id: String,
@@ -421,6 +592,10 @@ pub struct ServerKeyRecord {
 }
 
 /// A cached remote server's public key.
+///
+/// When verifying a signature from a federated server, we fetch and cache
+/// its public keys.  The cache is keyed by `(server_name, key_id)` and
+/// honoured until `valid_until` expires.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteKeyRecord {
     pub server_name: String,
@@ -430,6 +605,10 @@ pub struct RemoteKeyRecord {
 }
 
 /// Federation key storage.
+///
+/// Manages this server's signing key pairs, cached remote server public keys,
+/// and federation transaction deduplication (preventing replay of already-
+/// processed transaction IDs from a given origin server).
 #[async_trait]
 pub trait FederationKeyStore: Send + Sync {
     async fn store_server_key(&self, key: &ServerKeyRecord) -> StorageResult<()>;
@@ -445,6 +624,10 @@ pub trait FederationKeyStore: Send + Sync {
 }
 
 /// An event relation record.
+///
+/// Captures a relationship between a child event and its parent.  `rel_type`
+/// is one of `m.thread`, `m.annotation` (reaction), `m.replace` (edit), or
+/// `m.reference`.  For reactions, `content_key` holds the emoji or shortcode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationRecord {
     pub event_id: String,
@@ -458,6 +641,10 @@ pub struct RelationRecord {
 }
 
 /// An event report record.
+///
+/// Created when a user reports an event for abuse.  `score` is a client
+/// hint (-100 = most offensive, 0 = neutral).  The admin API can list
+/// reports for moderation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportRecord {
     pub event_id: String,
@@ -468,6 +655,11 @@ pub struct ReportRecord {
 }
 
 /// Event relation storage (threads, reactions, edits, references).
+///
+/// Relations link a child event to a parent event via `rel_type`.  This
+/// trait supports storing relations, querying them with pagination, computing
+/// aggregated reaction counts, finding the latest edit for an event, listing
+/// thread roots in a room, and storing abuse reports.
 #[async_trait]
 pub trait RelationStore: Send + Sync {
     /// Store a relation between events.
@@ -503,12 +695,21 @@ pub trait RelationStore: Send + Sync {
 }
 
 /// Health check for storage backends.
+///
+/// Called by the liveness probe endpoint (`/_health`).  Returns `true` if the
+/// underlying database connection is alive and responding.
 #[async_trait]
 pub trait HealthCheck: Send + Sync {
     async fn is_healthy(&self) -> bool;
 }
 
 /// Combined storage trait for the complete storage backend.
+///
+/// This is the trait that handler code receives as `Arc<dyn Storage>`.  It
+/// requires every sub-trait to be implemented, plus `Send + Sync + 'static`
+/// for safe sharing across Tokio tasks.  A blanket impl below means you never
+/// implement `Storage` directly -- just implement all the sub-traits and the
+/// compiler does the rest.
 pub trait Storage:
     UserStore
     + DeviceStore
