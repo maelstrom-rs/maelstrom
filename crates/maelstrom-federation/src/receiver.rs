@@ -35,11 +35,13 @@
 use axum::extract::{Path, State};
 use axum::routing::put;
 use axum::{Json, Router};
+use base64::Engine;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_core::matrix::event::Pdu;
+use maelstrom_storage::traits::RemoteKeyRecord;
 
 use crate::FederationState;
 
@@ -131,6 +133,123 @@ async fn receive_transaction(
     Ok(Json(serde_json::json!({ "pdus": pdu_results })))
 }
 
+/// Fetch a remote server's Ed25519 public key, using cache when available.
+///
+/// 1. Check local cache (`FederationKeyStore::get_remote_server_keys`)
+/// 2. If not cached or expired, fetch from the remote server via `/_matrix/key/v2/server`
+/// 3. Cache the fetched keys for future use
+/// 4. Return the public key bytes for the requested `key_id`
+async fn resolve_server_key(
+    state: &FederationState,
+    server_name: &str,
+    key_id: &str,
+) -> Option<[u8; 32]> {
+    let b64_engine = base64::engine::general_purpose::STANDARD_NO_PAD;
+
+    // 1. Check local cache
+    if let Ok(cached_keys) = state.storage().get_remote_server_keys(server_name).await {
+        for record in &cached_keys {
+            if record.key_id == key_id
+                && record.valid_until > chrono::Utc::now()
+                && let Ok(bytes) = b64_engine.decode(&record.public_key)
+                && let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice())
+            {
+                return Some(arr);
+            }
+        }
+    }
+
+    // 2. Fetch from remote server
+    let keys_response = match state.client().fetch_server_keys(server_name).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!(
+                server_name = %server_name,
+                error = %e,
+                "Failed to fetch server keys for signature verification"
+            );
+            return None;
+        }
+    };
+
+    // 3. Parse and cache the keys
+    let valid_until_ts = keys_response
+        .get("valid_until_ts")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let valid_until = chrono::DateTime::from_timestamp_millis(valid_until_ts as i64)
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(24));
+
+    let mut records = Vec::new();
+    let mut result_key: Option<[u8; 32]> = None;
+
+    if let Some(verify_keys) = keys_response.get("verify_keys").and_then(|v| v.as_object()) {
+        for (kid, key_data) in verify_keys {
+            if let Some(pub_key_b64) = key_data.get("key").and_then(|k| k.as_str()) {
+                records.push(RemoteKeyRecord {
+                    server_name: server_name.to_string(),
+                    key_id: kid.clone(),
+                    public_key: pub_key_b64.to_string(),
+                    valid_until,
+                });
+
+                if kid == key_id
+                    && let Ok(bytes) = b64_engine.decode(pub_key_b64)
+                    && let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice())
+                {
+                    result_key = Some(arr);
+                }
+            }
+        }
+    }
+
+    // Also check old_verify_keys in case the key rotated but we still need it
+    if result_key.is_none()
+        && let Some(old_keys) = keys_response
+            .get("old_verify_keys")
+            .and_then(|v| v.as_object())
+    {
+        for (kid, key_data) in old_keys {
+            let old_valid_until_ts = key_data
+                .get("expired_ts")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let old_valid_until =
+                chrono::DateTime::from_timestamp_millis(old_valid_until_ts as i64)
+                    .unwrap_or_else(chrono::Utc::now);
+
+            if let Some(pub_key_b64) = key_data.get("key").and_then(|k| k.as_str()) {
+                records.push(RemoteKeyRecord {
+                    server_name: server_name.to_string(),
+                    key_id: kid.clone(),
+                    public_key: pub_key_b64.to_string(),
+                    valid_until: old_valid_until,
+                });
+
+                if kid == key_id
+                    && let Ok(bytes) = b64_engine.decode(pub_key_b64)
+                    && let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice())
+                {
+                    result_key = Some(arr);
+                }
+            }
+        }
+    }
+
+    // Store all fetched keys in cache
+    if !records.is_empty()
+        && let Err(e) = state.storage().store_remote_server_keys(&records).await
+    {
+        warn!(
+            server_name = %server_name,
+            error = %e,
+            "Failed to cache remote server keys"
+        );
+    }
+
+    result_key
+}
+
 /// Process a single inbound PDU.
 async fn process_pdu(
     state: &FederationState,
@@ -175,6 +294,51 @@ async fn process_pdu(
     if state.storage().get_event(event_id).await.is_ok() {
         debug!(event_id = %event_id, "Event already exists, skipping");
         return Ok(());
+    }
+
+    // Verify event signature from the origin server
+    if let Some(sigs) = pdu_json.get("signatures").and_then(|s| s.as_object()) {
+        let signing_server = origin;
+        if let Some(server_sigs) = sigs.get(signing_server).and_then(|s| s.as_object()) {
+            let mut verified = false;
+            for (key_id, _sig) in server_sigs {
+                if let Some(public_key) = resolve_server_key(state, signing_server, key_id).await
+                    && maelstrom_core::matrix::signing::verify_event_signature(
+                        pdu_json,
+                        &public_key,
+                        signing_server,
+                        key_id,
+                    )
+                {
+                    verified = true;
+                    break;
+                }
+            }
+            if !verified {
+                warn!(
+                    event_id = %event_id,
+                    origin = %origin,
+                    "Event signature verification failed"
+                );
+                return Err(MatrixError::forbidden(
+                    "Event signature verification failed",
+                ));
+            }
+        } else {
+            // No signature from the origin server — warn but allow for now.
+            // Third-party invites and some edge cases may have signatures from
+            // a different server than the transaction origin.
+            warn!(
+                event_id = %event_id,
+                origin = %origin,
+                "No signature from origin server on event"
+            );
+        }
+    } else {
+        warn!(
+            event_id = %event_id,
+            "Event has no signatures field"
+        );
     }
 
     // Build Pdu from incoming event
@@ -344,71 +508,17 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
 }
 
 /// Check if a server is allowed by the room's `m.room.server_acl` state event.
-///
-/// Returns `Ok(())` if the server is allowed (or no ACL event exists).
-/// Returns `Err(MatrixError::forbidden)` if the server is denied.
 async fn check_server_acl(
     storage: &dyn maelstrom_storage::traits::Storage,
     room_id: &str,
     server_name: &str,
 ) -> Result<(), MatrixError> {
     use maelstrom_core::matrix::room::event_type as et;
-
-    let acl_event = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
-        Ok(event) => event,
+    let acl = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
+        Ok(e) => e,
         Err(_) => return Ok(()),
     };
-
-    let content = &acl_event.content;
-    let allow_ip_literals = content
-        .get("allow_ip_literals")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let allow = content
-        .get("allow")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let deny = content
-        .get("deny")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    if !allow_ip_literals {
-        let host = server_name.split(':').next().unwrap_or(server_name);
-        let first_char = host.chars().next().unwrap_or(' ');
-        if first_char.is_ascii_digit() || first_char == '[' {
-            return Err(MatrixError::forbidden(
-                "Server ACL denies IP literal server names",
-            ));
-        }
-    }
-
-    for pattern in &deny {
-        if server_acl_glob_match(pattern, server_name) {
-            return Err(MatrixError::forbidden("Server is denied by room ACL"));
-        }
-    }
-
-    if allow.is_empty() {
-        return Err(MatrixError::forbidden("Server ACL allows no servers"));
-    }
-    for pattern in &allow {
-        if server_acl_glob_match(pattern, server_name) {
-            return Ok(());
-        }
-    }
-
-    Err(MatrixError::forbidden("Server not in room ACL allow list"))
-}
-
-fn server_acl_glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return value.ends_with(suffix);
-    }
-    pattern == value
+    maelstrom_core::matrix::room::server_acl_allowed(&acl.content, server_name)
+        .then_some(())
+        .ok_or_else(|| MatrixError::forbidden("Server denied by room ACL"))
 }

@@ -131,83 +131,22 @@ pub async fn verify_password(password: String, hash: String) -> Result<(), Strin
 /// Returns `Ok(())` if the server is allowed (or no ACL exists), or
 /// `Err(MatrixError::forbidden)` if the server is denied.
 ///
-/// Rules (per the Matrix spec):
-/// 1. If `allow_ip_literals` is false, reject server names that look like IP addresses.
-/// 2. Check the `deny` list first -- any match rejects.
-/// 3. Check the `allow` list -- the server must match at least one entry.
+/// Check if a server is allowed by the room's `m.room.server_acl` state event.
+///
+/// Returns `Ok(())` if allowed or no ACL exists, `Err(403)` if denied.
 pub async fn check_server_acl(
     storage: &dyn maelstrom_storage::traits::Storage,
     room_id: &str,
     server_name: &str,
 ) -> Result<(), MatrixError> {
     use maelstrom_core::matrix::room::event_type as et;
-
-    // Get the m.room.server_acl state event
-    let acl_event = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
-        Ok(event) => event,
-        Err(_) => return Ok(()), // No ACL = all servers allowed
+    let acl = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
     };
-
-    let content = &acl_event.content;
-    let allow_ip_literals = content
-        .get("allow_ip_literals")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let allow = content
-        .get("allow")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let deny = content
-        .get("deny")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    // Check IP literal restriction -- strip any port suffix first
-    if !allow_ip_literals {
-        let host = server_name.split(':').next().unwrap_or(server_name);
-        let first_char = host.chars().next().unwrap_or(' ');
-        if first_char.is_ascii_digit() || first_char == '[' {
-            return Err(MatrixError::forbidden(
-                "Server ACL denies IP literal server names",
-            ));
-        }
-    }
-
-    // Check deny list first
-    for pattern in &deny {
-        if server_acl_glob_match(pattern, server_name) {
-            return Err(MatrixError::forbidden("Server is denied by room ACL"));
-        }
-    }
-
-    // Check allow list
-    if allow.is_empty() {
-        return Err(MatrixError::forbidden("Server ACL allows no servers"));
-    }
-    for pattern in &allow {
-        if server_acl_glob_match(pattern, server_name) {
-            return Ok(());
-        }
-    }
-
-    Err(MatrixError::forbidden("Server not in room ACL allow list"))
-}
-
-/// Simple glob matching for server ACL patterns.
-///
-/// Supports `*` as a standalone wildcard (matches everything) and `*` as a
-/// prefix wildcard (e.g. `*.evil.com` matches `sub.evil.com`).  Literal
-/// patterns must match exactly.
-fn server_acl_glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return value.ends_with(suffix);
-    }
-    pattern == value
+    maelstrom_core::matrix::room::server_acl_allowed(&acl.content, server_name)
+        .then_some(())
+        .ok_or_else(|| MatrixError::forbidden("Server denied by room ACL"))
 }
 
 /// Find all remote servers that share rooms with a user.

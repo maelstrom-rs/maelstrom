@@ -555,8 +555,8 @@ Full admin API (JSON) + admin dashboard (SSR HTML). Admin auth via is_admin flag
 
 **Goal**: 100% Complement pass rate for CS API + Federation. Validated with real clients. Performance meets targets.
 
-**Baseline**: 317/536 (59%) → **Target**: 500+/536 (93%+)  
-**Federation baseline**: ~0/90 federation tests → **Target**: 70+/90
+**Current**: 336/538 (62.5%) → **Target**: 500+/538 (93%+)  
+**Federation**: Infrastructure complete, hardening in progress. Signature verification implemented.
 
 #### 10A — CS API Hardening (complete)
 
@@ -577,46 +577,60 @@ Full admin API (JSON) + admin dashboard (SSR HTML). Admin auth via is_admin flag
 - [x] **10.15** Migrate all handlers to `matrix::*` types — replaced all raw string comparisons with `Membership`, `JoinRule`, `HistoryVisibility` enums and `event_type::*` constants (~80 call sites)
 - [x] **10.16** Consolidate `maelstrom-core` — moved `error.rs`, `json.rs`, `signatures/`, `state/`, `ephemeral.rs` into `matrix/` module. `lib.rs` is now `pub mod matrix;`
 - [x] **10.17** Code quality — replaced hand-rolled percent encoding with `urlencoding` crate, replaced `std::sync::Mutex` with `DashMap` in async code (notify, federation sender/client), extracted `require_membership` helper, DRYed signing.rs, fixed `generate_event_id` to use base64 crate, made 18+ methods `const fn`, added rustdoc to ~65 files
-- [ ] **10.18** Search: back-pagination (next_batch offset), context around results (before/after events)
-- [ ] **10.19** Remaining CS API edge cases: redaction of unknown events in sync, TxnId with refresh tokens, sync filter in long-poll re-query path
+- [x] **10.18** Receipt schema fix: added `thread_id` field to SCHEMAFULL receipt table, normalized to `String` (empty = unthreaded)
+- [x] **10.19** Sync race condition: subscribe to notifier BEFORE checking for events (prevents missed receipts/typing)
+- [x] **10.20** Broadcast channel fix: handle `Lagged` error in notification forwarding tasks (was silently killing subscribers)
+- [x] **10.21** Account data deletion (MSC3391): sentinel-based approach — deleted entries appear in sync with empty `{}` content, GET returns 404
+- [x] **10.22** Poll push rules: added all stable + unstable poll push rules, fixed `actions: []` vs `["dont_notify"]`
+- [x] **10.23** Device notification settings: sync notification after MSC3890 cleanup on device deletion
+- [x] **10.24** Owned state keys: power level check uses `users_default` (not `state_default`) when state_key matches sender
+- [x] **10.25** `server_name` query param: changed from `Option<Vec<String>>` to `Option<String>` — Complement sends single value, not array
+- [x] **10.26** Detailed rustdoc: comprehensive documentation across all 95 source files with Matrix protocol explanations
+- [ ] **10.27** Search: back-pagination (next_batch offset), context around results (partially implemented)
+- [ ] **10.28** Remaining CS API edge cases: redaction of unknown events in sync, TxnId with refresh tokens, typing stop detection
 
 #### 10B — Federation Hardening ← ACTIVE SPRINT
 
-**Current state**: Federation crate is ~1700 LOC across 13 files. Core infrastructure exists (signing, key server, transactions, joins, backfill, state queries, invite, queries). Complement federation tests need to be run and failures triaged. Broken into:
+**Current state**: 336/538 Complement tests passing (62.5%). Federation crate is ~2000 LOC across 13 files. Signature verification, server ACL enforcement, device list EDU propagation, and profile queries all implemented. Remaining failures:
 
-| Category | Tests | Root Cause |
-|----------|-------|------------|
-| PartialStateJoin | 56 | Requires partial state join protocol (MSC3706) — complex, defer |
-| InviteFiltering | 11 | Missing `send_invite` federation endpoint |
-| DeviceListUpdates | 12 | Incomplete device_list EDU propagation |
-| FederationProfile | 3 | Missing profile query federation endpoint |
-| MessagesOverFederation | 3 | Backfill needs proper DAG walking |
-| Other | 5 | Mixed: redacts, aliases, presence, is_direct over federation |
+| Category | Fail | Status |
+|----------|------|--------|
+| PartialStateJoin | 59 | Defer — MSC3706, complex protocol |
+| Sync edge cases | 51 | Active — state resolution, event ordering, lazy loading |
+| State (MSCs) | 40 | Mixed — DelayedEvents (MSC4140), MSC4222 deferred; owned state fixed |
+| Members | 19 | Active — device list tracking, federation join edge cases |
+| Messages | 19 | Active — outbound backfill needed |
+| InviteFiltering | 11 | MSC4155 (per-user invite permissions), not server_acl |
+| Relations | 11 | Active — aggregation and pagination gaps |
+| DeviceListUpdates | 6 | Partially fixed — join detection done, leave/remote tracking remaining |
+| ThreadSubscriptions | 7 | Defer — MSC4306, unstable |
+| ServerNotices | 8 | Defer — not a standard feature |
+| AsyncUpload | 6 | Defer — not implemented |
 
-**Step 1: Foundation — make federation actually work in Complement** (blocks everything else)
-- [ ] **10B.1** Fix Complement federation Docker setup: ensure two homeserver containers can reach each other, TLS certificates configured, `.well-known/matrix/server` served correctly
-- [ ] **10B.2** Fix `POST /join/{roomIdOrAlias}` for remote rooms: when alias resolves to a remote server, the CS API handler must initiate the federation join flow (make_join → sign → send_join) instead of returning 404
-- [ ] **10B.3** Verify key server responses are correct: `GET /_matrix/key/v2/server` must return properly signed JSON with valid `verify_keys`, `valid_until_ts`, and `old_verify_keys`
-- [ ] **10B.4** Verify transaction receiving works: `PUT /_matrix/federation/v1/send/{txnId}` must accept and correctly process PDUs from Complement's test homeserver
+**Step 1: Foundation — make federation actually work in Complement** ✅
+- [x] **10B.1** Complement federation Docker setup: TLS certificates, `.well-known/matrix/server`, two-server communication
+- [x] **10B.2** `POST /join/{roomIdOrAlias}` for remote rooms: CS API initiates make_join → sign → send_join
+- [x] **10B.3** Key server responses: `GET /_matrix/key/v2/server` returns properly signed JSON
+- [x] **10B.4** Transaction receiving: `PUT /_matrix/federation/v1/send/{txnId}` processes PDUs
 
-**Step 2: Invite over federation** (~11 tests)
-- [ ] **10B.5** Implement `PUT /_matrix/federation/v2/invite/{roomId}/{eventId}` — accept invites from remote servers, store invite membership, return signed event
-- [ ] **10B.6** Implement `PUT /_matrix/federation/v1/invite/{roomId}/{eventId}` — v1 compat (same as v2 but different response format)
-- [ ] **10B.7** Outbound invite: when CS API invite targets a remote user (`@user:otherserver`), send the invite via federation instead of storing locally
-- [ ] **10B.8** InviteFiltering tests: implement `m.room.server_acl` checking on inbound federation requests
+**Step 2: Invite over federation** (partially complete)
+- [x] **10B.5** `PUT /_matrix/federation/v2/invite/{roomId}/{eventId}` — accept invites from remote servers
+- [x] **10B.6** `PUT /_matrix/federation/v1/invite/{roomId}/{eventId}` — v1 compat
+- [x] **10B.7** Outbound invite: CS API invite for remote users routes through federation
+- [x] **10B.8** `m.room.server_acl` checking on inbound federation (receiver, joins, invites)
 
-**Step 3: Profile over federation** (~3 tests)
-- [ ] **10B.9** Implement `GET /_matrix/federation/v1/query/profile` — serve local user profiles to remote servers (displayname, avatar_url)
-- [ ] **10B.10** Outbound profile query: when CS API requests profile for `@user:otherserver`, query via federation
+**Step 3: Profile over federation** ✅
+- [x] **10B.9** `GET /_matrix/federation/v1/query/profile` — serve local user profiles with proper validation
+- [x] **10B.10** Outbound profile query: CS API profile handlers query remote servers via federation
 
-**Step 4: Device list updates over federation** (~12 tests)
-- [ ] **10B.11** On device change (key upload, device delete), queue `m.device_list_update` EDU to all servers sharing rooms with the user
-- [ ] **10B.12** On inbound `m.device_list_update` EDU, update local cache of remote device keys and notify sync
-- [ ] **10B.13** Track which servers need device list updates via `device_list_update_stream` concept (since tokens per server)
-- [ ] **10B.14** `GET /keys/changes` must return users whose device lists changed since the given token (currently a stub)
+**Step 4: Device list updates over federation** (partially complete)
+- [x] **10B.11** On device change (key upload, device delete), queue `m.device_list_update` EDU to remote servers
+- [x] **10B.12** On inbound `m.device_list_update` EDU, record change position for sync `device_lists.changed`
+- [ ] **10B.13** Track which servers need device list updates via per-server stream tracking
+- [x] **10B.14** `device_lists.changed` in sync includes users from newly joined rooms
 
-**Step 5: Signature verification** (security hardening, unblocks auth tests)
-- [ ] **10B.15** Verify signatures on inbound PDUs in `receiver.rs` before storing: fetch remote server's signing key, verify event signature
+**Step 5: Signature verification** (partially complete)
+- [x] **10B.15** Verify signatures on inbound PDUs: `resolve_server_key` fetches+caches remote keys, `verify_event_signature` checks Ed25519. Present-but-invalid sigs hard-rejected, missing sigs warned.
 - [ ] **10B.16** Verify signatures on inbound `send_join`/`send_leave` responses
 - [ ] **10B.17** Verify signatures on fetched remote server keys (key_server notary responses)
 - [ ] **10B.18** Reject events with invalid or missing signatures (`TestInboundFederationRejectsEventsWithRejectedAuthEvents`)
@@ -698,16 +712,18 @@ Synapse users can migrate to Maelstrom. Kubernetes deployment is one-command. 1.
 | 7 | Federation | **Complete** (infrastructure) | Phase 4 |
 | 8 | Matrix 2.0+ Features | **Complete** | Phase 4 |
 | 9 | Admin & Operations | **Complete** | Phase 6, 7 |
-| 10A | CS API Hardening | **Complete** — type system, code quality, rustdoc, DRY, async patterns | Phase 7, 8 |
-| 10B | Federation Hardening | **Active** — 0/90 Complement federation tests, 10-step plan ready | Phase 7 |
+| 10A | CS API Hardening | **Complete** — types, code quality, rustdoc, receipts, presence, typing, push rules, account data | Phase 7, 8 |
+| 10B | Federation Hardening | **Active** — Steps 1-4 done, Step 5 (signatures) in progress, Steps 6-10 remaining | Phase 7 |
 | 10C | Client Compat & Prod | Not Started | Phase 10A, 10B |
 | 11 | Migration & 1.0 | Not Started | Phase 10 |
 
 ### Current Focus: Phase 10B — Federation Hardening
 
-**Objective**: Pass Complement federation tests. The federation infrastructure exists (~1700 LOC) but needs hardening against the spec compliance test suite.
+**Objective**: Complete Matrix federation spec compliance. Pass Complement federation tests.
 
-**Stats**: 95 source files, ~22K LOC, 107 tests passing, zero clippy warnings.
+**Stats**: 95 source files, ~22K LOC, 107 unit tests, 336/538 Complement tests (62.5%), zero clippy warnings.
+
+**Next up**: Step 5 (signature verification on joins), Step 6 (event authorization rules), Step 7 (outbound backfill).
 
 ### Parallelization Opportunities
 

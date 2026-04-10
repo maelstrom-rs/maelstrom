@@ -285,7 +285,7 @@ impl Pdu {
 /// Matrix clients need to know the sender's membership in the room at the time of each
 /// event (e.g., to show "invited" badges).  [`with_membership`](ClientEvent::with_membership)
 /// injects this into `unsigned.membership` per the spec.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientEvent {
     pub event_id: String,
     pub room_id: String,
@@ -434,7 +434,7 @@ pub fn default_power_levels(creator: &str) -> serde_json::Value {
 /// * `content` -- the event payload.
 ///
 /// No `event_id`, `room_id`, `origin_server_ts`, `unsigned`, or federation fields.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrippedEvent {
     /// The event type (e.g., `m.room.name`, `m.room.join_rules`).
     #[serde(rename = "type")]

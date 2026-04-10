@@ -38,6 +38,15 @@ use dashmap::DashMap;
 use maelstrom_core::matrix::event::{Pdu, timestamp_ms};
 use tracing::{debug, info, warn};
 
+/// How often the sender loop checks for queued events.
+const DRAIN_INTERVAL_MS: u64 = 200;
+/// Maximum PDUs per federation transaction (spec recommendation).
+const MAX_PDUS_PER_TXN: usize = 50;
+/// Maximum EDUs per federation transaction.
+const MAX_EDUS_PER_TXN: usize = 100;
+/// Maximum backoff wait before retrying a failed destination.
+const MAX_BACKOFF_MS: u64 = 3_600_000; // 1 hour
+
 use crate::client::FederationClient;
 
 /// Outbound federation transaction sender with per-destination queuing and retry.
@@ -112,7 +121,7 @@ impl TransactionSender {
         let mut backoff: HashMap<String, u64> = HashMap::new();
 
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(DRAIN_INTERVAL_MS)).await;
 
             let destinations: Vec<String> = {
                 let mut dests: std::collections::HashSet<String> = self
@@ -141,7 +150,7 @@ impl TransactionSender {
                 // Drain up to 50 PDUs
                 let pdus: Vec<serde_json::Value> =
                     if let Some(mut queue) = self.queues.get_mut(&dest) {
-                        let count = queue.len().min(50);
+                        let count = queue.len().min(MAX_PDUS_PER_TXN);
                         queue.drain(..count).collect()
                     } else {
                         continue;
@@ -150,7 +159,7 @@ impl TransactionSender {
                 // Drain up to 100 EDUs
                 let edus: Vec<serde_json::Value> =
                     if let Some(mut queue) = self.edu_queues.get_mut(&dest) {
-                        let count = queue.len().min(100);
+                        let count = queue.len().min(MAX_EDUS_PER_TXN);
                         queue.drain(..count).collect()
                     } else {
                         Vec::new()
@@ -191,7 +200,7 @@ impl TransactionSender {
                         let next_wait = if current_wait == 0 {
                             1000
                         } else {
-                            (current_wait * 2).min(3_600_000)
+                            (current_wait * 2).min(MAX_BACKOFF_MS)
                         };
                         backoff.insert(dest, timestamp_ms() + next_wait);
                     }

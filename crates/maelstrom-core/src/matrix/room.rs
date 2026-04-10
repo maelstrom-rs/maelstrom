@@ -718,4 +718,100 @@ mod tests {
         assert!(HistoryVisibility::Shared.visible_to_departed());
         assert!(!HistoryVisibility::Joined.visible_to_departed());
     }
+
+    #[test]
+    fn server_acl_matching() {
+        assert!(server_acl_glob_match("*", "anything.com"));
+        assert!(server_acl_glob_match("*.evil.com", "sub.evil.com"));
+        assert!(!server_acl_glob_match("*.evil.com", "evil.com"));
+        assert!(server_acl_glob_match("exact.com", "exact.com"));
+        assert!(!server_acl_glob_match("exact.com", "other.com"));
+    }
+
+    #[test]
+    fn server_acl_evaluation() {
+        let acl = serde_json::json!({
+            "allow": ["*"],
+            "deny": ["*.evil.com"],
+            "allow_ip_literals": false
+        });
+        assert!(server_acl_allowed(&acl, "good.com"));
+        assert!(!server_acl_allowed(&acl, "sub.evil.com"));
+        assert!(!server_acl_allowed(&acl, "1.2.3.4"));
+        assert!(!server_acl_allowed(&acl, "[::1]:8448"));
+    }
+}
+
+// ── Server ACL ─────────────────────────────────────────────────────────
+
+/// Evaluate whether a server is allowed by an `m.room.server_acl` event's content.
+///
+/// Pass the `content` field of the ACL state event. Returns `true` if the
+/// server is allowed, `false` if denied. When no ACL event exists in a room,
+/// callers should treat all servers as allowed (don't call this function).
+///
+/// Evaluation order per spec:
+/// 1. If `allow_ip_literals` is false, reject IP-address server names
+/// 2. Check deny list — if any pattern matches, reject
+/// 3. Check allow list — if any pattern matches, allow
+/// 4. If no allow pattern matches, reject
+pub fn server_acl_allowed(content: &serde_json::Value, server_name: &str) -> bool {
+    let allow_ip_literals = content
+        .get("allow_ip_literals")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let allow: Vec<&str> = content
+        .get("allow")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let deny: Vec<&str> = content
+        .get("deny")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    // 1. IP literal check
+    if !allow_ip_literals {
+        let host = server_name.split(':').next().unwrap_or(server_name);
+        if let Some(c) = host.chars().next()
+            && (c.is_ascii_digit() || c == '[')
+        {
+            return false;
+        }
+    }
+
+    // 2. Deny list
+    for pattern in &deny {
+        if server_acl_glob_match(pattern, server_name) {
+            return false;
+        }
+    }
+
+    // 3. Allow list
+    if allow.is_empty() {
+        return false;
+    }
+    for pattern in &allow {
+        if server_acl_glob_match(pattern, server_name) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Glob matching for server ACL patterns.
+///
+/// - `"*"` matches everything
+/// - `"*.suffix"` matches any server ending with `.suffix`
+/// - Anything else is an exact match
+pub fn server_acl_glob_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return value.ends_with(suffix);
+    }
+    pattern == value
 }

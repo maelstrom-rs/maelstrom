@@ -1162,14 +1162,29 @@ async fn compute_device_lists(
             joined_rooms.iter().map(|s| s.as_str()).collect();
         for event in &new_events {
             if event.event_type == et::MEMBER && joined_set.contains(event.room_id.as_str()) {
-                // Use state_key as the target user (not sender, which may differ for invites)
                 let target_user = event.state_key.as_deref().unwrap_or(&event.sender);
 
-                if target_user == my_user_id {
-                    continue;
-                }
-
                 if let Some(membership) = event.content.get("membership").and_then(|m| m.as_str()) {
+                    // When WE join a room, all existing members should appear in changed
+                    // (we need their device keys now that we share a room).
+                    if target_user == my_user_id && membership == Membership::Join.as_str() {
+                        if let Ok(members) = storage
+                            .get_room_members(&event.room_id, Membership::Join.as_str())
+                            .await
+                        {
+                            for member in members {
+                                if member != my_user_id {
+                                    changed.insert(member);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    if target_user == my_user_id {
+                        continue;
+                    }
+
                     match membership {
                         m if m == Membership::Join.as_str() => {
                             changed.insert(target_user.to_string());
