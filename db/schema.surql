@@ -211,8 +211,9 @@ DEFINE FIELD IF NOT EXISTS room_id       ON TABLE receipt TYPE string;
 DEFINE FIELD IF NOT EXISTS receipt_type  ON TABLE receipt TYPE string;
 DEFINE FIELD IF NOT EXISTS event_id      ON TABLE receipt TYPE string;
 DEFINE FIELD IF NOT EXISTS ts            ON TABLE receipt TYPE int;
-DEFINE INDEX IF NOT EXISTS idx_receipt_user_room_type ON TABLE receipt FIELDS user_id, room_id, receipt_type UNIQUE;
-DEFINE INDEX IF NOT EXISTS idx_receipt_room           ON TABLE receipt FIELDS room_id;
+DEFINE FIELD IF NOT EXISTS thread_id     ON TABLE receipt TYPE string DEFAULT "";
+DEFINE INDEX IF NOT EXISTS idx_receipt_user_room_type_thread ON TABLE receipt FIELDS user_id, room_id, receipt_type, thread_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_receipt_room                  ON TABLE receipt FIELDS room_id;
 
 -- =============================================================
 -- E2EE: Device keys

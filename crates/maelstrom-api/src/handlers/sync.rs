@@ -380,6 +380,20 @@ async fn sync(
             .await;
     }
 
+    // Subscribe to notifications BEFORE checking for events. This prevents
+    // a race where an event arrives between the check and the long-poll —
+    // without this, receipts/typing posted in that window would be missed.
+    let mut rx = if timeout > 0 && !is_initial {
+        Some(
+            state
+                .notifier()
+                .subscribe(&joined_rooms, Some(&user_id))
+                .await,
+        )
+    } else {
+        None
+    };
+
     // Check ephemeral events (typing, receipts) before deciding to long-poll
     let mut join_map =
         add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms).await?;
@@ -396,7 +410,14 @@ async fn sync(
                     events: room_ad
                         .into_iter()
                         .map(|(dtype, content)| {
-                            serde_json::json!({ "type": dtype, "content": content })
+                            // MSC3391: expose deleted entries with empty content
+                            if content.get("_msc3391_deleted").and_then(|v| v.as_bool())
+                                == Some(true)
+                            {
+                                serde_json::json!({ "type": dtype, "content": {} })
+                            } else {
+                                serde_json::json!({ "type": dtype, "content": content })
+                            }
                         })
                         .collect(),
                 });
@@ -408,12 +429,7 @@ async fn sync(
     let has_events = !join_map.is_empty() || !to_device_events.is_empty();
 
     // If no events and timeout > 0, long-poll (only for incremental sync)
-    if !has_events && timeout > 0 && !is_initial {
-        let mut rx = state
-            .notifier()
-            .subscribe(&joined_rooms, Some(&user_id))
-            .await;
-
+    if !has_events && let Some(mut rx) = rx.take() {
         tokio::select! {
             _ = rx.recv() => {}
             _ = tokio::time::sleep(Duration::from_millis(timeout)) => {}
@@ -445,7 +461,13 @@ async fn sync(
                     events: room_ad
                         .into_iter()
                         .map(|(dtype, content)| {
-                            serde_json::json!({ "type": dtype, "content": content })
+                            if content.get("_msc3391_deleted").and_then(|v| v.as_bool())
+                                == Some(true)
+                            {
+                                serde_json::json!({ "type": dtype, "content": {} })
+                            } else {
+                                serde_json::json!({ "type": dtype, "content": content })
+                            }
                         })
                         .collect(),
                 };
@@ -835,9 +857,13 @@ async fn build_initial_sync(
             Some(AccountDataResponse {
                 events: room_account_data
                     .into_iter()
-                    .map(
-                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
-                    )
+                    .map(|(dtype, content)| {
+                        if content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true) {
+                            serde_json::json!({ "type": dtype, "content": {} })
+                        } else {
+                            serde_json::json!({ "type": dtype, "content": content })
+                        }
+                    })
                     .collect(),
             })
         };
@@ -1185,6 +1211,11 @@ async fn add_ephemeral_events(
         // Always include typing indicators — even an empty user_ids list is
         // meaningful (it tells the client that typing has stopped).
         let typing_users = ephemeral.get_typing_users(room_id);
+        let receipts = storage.get_receipts(room_id).await.unwrap_or_else(|e| {
+            tracing::warn!(room_id = %room_id, error = %e, "Failed to fetch receipts");
+            vec![]
+        });
+
         ephemeral_events.push(serde_json::json!({
             "type": "m.typing",
             "content": {
@@ -1192,20 +1223,15 @@ async fn add_ephemeral_events(
             }
         }));
 
-        // Read receipts
-        let receipts = storage.get_receipts(room_id).await.unwrap_or_else(|e| {
-            tracing::warn!(room_id = %room_id, error = %e, "Failed to fetch receipts");
-            vec![]
-        });
-
         if !receipts.is_empty() {
             let mut content: HashMap<String, HashMap<String, HashMap<String, serde_json::Value>>> =
                 HashMap::new();
 
             for receipt in &receipts {
                 let mut receipt_data = serde_json::json!({ "ts": receipt.ts });
-                if let Some(ref tid) = receipt.thread_id {
-                    receipt_data["thread_id"] = serde_json::Value::String(tid.clone());
+                if !receipt.thread_id.is_empty() {
+                    receipt_data["thread_id"] =
+                        serde_json::Value::String(receipt.thread_id.clone());
                 }
                 content
                     .entry(receipt.event_id.clone())
@@ -1560,10 +1586,26 @@ async fn build_global_account_data(
     // Include all user account data
     if let Ok(all_data) = storage.get_all_account_data(user_id).await {
         for (data_type, content) in all_data {
-            events.push(serde_json::json!({
-                "type": data_type,
-                "content": content,
-            }));
+            let is_deleted =
+                content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true);
+            if is_deleted && is_initial {
+                // On initial sync, skip deleted entries — the client has never
+                // seen them so there is nothing to clear.
+                continue;
+            }
+            // MSC3391: deleted account data is stored with a sentinel;
+            // expose it to clients as empty content so they clear the key.
+            if is_deleted {
+                events.push(serde_json::json!({
+                    "type": data_type,
+                    "content": {},
+                }));
+            } else {
+                events.push(serde_json::json!({
+                    "type": data_type,
+                    "content": content,
+                }));
+            }
         }
     }
 

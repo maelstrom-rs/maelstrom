@@ -55,7 +55,7 @@ pub struct MockStorage {
     txn_ids: Mutex<HashMap<String, String>>,
     stream_position: AtomicI64,
     /// Receipts: (user_id, room_id, receipt_type) -> (event_id, ts)
-    receipts: Mutex<HashMap<(String, String, String), (String, u64)>>,
+    receipts: Mutex<HashMap<(String, String, String, String), (String, u64)>>,
     /// E2EE device keys: (user_id, device_id) -> key data
     device_keys: Mutex<HashMap<(String, String), serde_json::Value>>,
     /// E2EE one-time keys: (user_id, device_id, key_id) -> key data
@@ -852,7 +852,7 @@ impl ReceiptStore for MockStorage {
         room_id: &str,
         receipt_type: &str,
         event_id: &str,
-        _thread_id: Option<&str>,
+        thread_id: &str,
     ) -> StorageResult<()> {
         let mut map = self.receipts.lock().unwrap();
         let now_ms = std::time::SystemTime::now()
@@ -864,6 +864,7 @@ impl ReceiptStore for MockStorage {
                 user_id.to_string(),
                 room_id.to_string(),
                 receipt_type.to_string(),
+                thread_id.to_string(),
             ),
             (event_id.to_string(), now_ms),
         );
@@ -874,13 +875,13 @@ impl ReceiptStore for MockStorage {
         let map = self.receipts.lock().unwrap();
         Ok(map
             .iter()
-            .filter(|((_, rid, _), _)| rid == room_id)
-            .map(|((uid, _, rtype), (eid, ts))| ReceiptRecord {
+            .filter(|((_, rid, _, _), _)| rid == room_id)
+            .map(|((uid, _, rtype, tid), (eid, ts))| ReceiptRecord {
                 user_id: uid.clone(),
                 receipt_type: rtype.clone(),
                 event_id: eid.clone(),
                 ts: *ts,
-                thread_id: None,
+                thread_id: tid.clone(),
             })
             .collect())
     }

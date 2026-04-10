@@ -198,10 +198,16 @@ async fn search(
             let mut before_events = Vec::new();
             let mut after_events = Vec::new();
 
+            let mut start_token = event.stream_position.to_string();
+            let mut end_token = event.stream_position.to_string();
+
             if let Ok(before) = storage
                 .get_room_events(&event.room_id, event.stream_position, before_limit, "b")
                 .await
             {
+                if let Some(first) = before.last() {
+                    start_token = first.stream_position.to_string();
+                }
                 before_events = before
                     .iter()
                     .map(|e| e.to_client_event().into_json())
@@ -211,6 +217,9 @@ async fn search(
                 .get_room_events(&event.room_id, event.stream_position, after_limit, "f")
                 .await
             {
+                if let Some(last) = after.last() {
+                    end_token = last.stream_position.to_string();
+                }
                 after_events = after
                     .iter()
                     .map(|e| e.to_client_event().into_json())
@@ -220,8 +229,9 @@ async fn search(
             result["context"] = serde_json::json!({
                 "events_before": before_events,
                 "events_after": after_events,
-                "start": event.stream_position.to_string(),
-                "end": event.stream_position.to_string(),
+                "start": start_token,
+                "end": end_token,
+                "profile_info": {},
             });
         }
 
@@ -232,12 +242,15 @@ async fn search(
     let next_offset = offset + filtered.len();
     let has_more = next_offset < total_count;
 
+    // Build highlights from search terms (split on whitespace)
+    let highlights: Vec<&str> = room_search.search_term.split_whitespace().collect();
+
     let mut response = serde_json::json!({
         "search_categories": {
             "room_events": {
                 "results": results,
                 "count": count,
-                "highlights": [],
+                "highlights": highlights,
             }
         }
     });

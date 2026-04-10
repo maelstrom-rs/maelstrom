@@ -210,9 +210,15 @@ impl Notifier for LocalNotifier {
             let mpsc_tx = mpsc_tx.clone();
 
             tokio::spawn(async move {
-                while let Ok(notification) = rx.recv().await {
-                    if mpsc_tx.send(notification).await.is_err() {
-                        break; // receiver dropped
+                loop {
+                    match rx.recv().await {
+                        Ok(notification) => {
+                            if mpsc_tx.send(notification).await.is_err() {
+                                break; // receiver dropped
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
             });
@@ -225,14 +231,20 @@ impl Notifier for LocalNotifier {
             let uid = uid.to_string();
 
             tokio::spawn(async move {
-                while let Ok(notification) = rx.recv().await {
-                    let matches = match &notification {
-                        Notification::Presence { user_id } => *user_id == uid,
-                        Notification::AccountData { user_id } => *user_id == uid,
-                        _ => false,
-                    };
-                    if matches && mpsc_tx.send(notification).await.is_err() {
-                        break;
+                loop {
+                    match rx.recv().await {
+                        Ok(notification) => {
+                            let matches = match &notification {
+                                Notification::Presence { user_id } => *user_id == uid,
+                                Notification::AccountData { user_id } => *user_id == uid,
+                                _ => false,
+                            };
+                            if matches && mpsc_tx.send(notification).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
             });

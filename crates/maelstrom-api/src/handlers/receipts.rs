@@ -58,21 +58,16 @@ async fn send_receipt(
         return Err(MatrixError::forbidden("You are not in this room"));
     }
 
-    // Extract thread_id from request body (MSC4102)
+    // Extract thread_id from request body (MSC4102).
+    // Empty string means unthreaded (the default).
     let thread_id = body
         .as_ref()
         .and_then(|b| b.get("thread_id"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .unwrap_or("");
 
     storage
-        .set_receipt(
-            &sender,
-            &room_id,
-            &receipt_type,
-            &event_id,
-            thread_id.as_deref(),
-        )
+        .set_receipt(&sender, &room_id, &receipt_type, &event_id, thread_id)
         .await
         .map_err(|e| MatrixError::unknown(e.to_string()))?;
 

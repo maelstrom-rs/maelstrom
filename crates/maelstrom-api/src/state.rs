@@ -13,6 +13,7 @@ use std::sync::Arc;
 use maelstrom_core::matrix::ephemeral::EphemeralStore;
 use maelstrom_core::matrix::id::ServerName;
 use maelstrom_federation::client::FederationClient;
+use maelstrom_federation::sender::TransactionSender;
 use maelstrom_media::client::MediaClient;
 use maelstrom_storage::traits::Storage;
 
@@ -53,6 +54,7 @@ struct AppStateInner {
     ephemeral: Arc<EphemeralStore>,
     media: Option<MediaClient>,
     federation: Option<Arc<FederationClient>>,
+    transaction_sender: Option<Arc<TransactionSender>>,
     server_name: ServerName,
     public_base_url: String,
     max_upload_size: u64,
@@ -77,6 +79,7 @@ impl AppState {
                 ephemeral,
                 media: None,
                 federation: None,
+                transaction_sender: None,
                 server_name,
                 public_base_url,
                 max_upload_size: 50 * 1024 * 1024, // 50 MiB default
@@ -103,6 +106,7 @@ impl AppState {
                 ephemeral,
                 media: Some(media),
                 federation: None,
+                transaction_sender: None,
                 server_name,
                 public_base_url,
                 max_upload_size: 50 * 1024 * 1024,
@@ -115,6 +119,13 @@ impl AppState {
         // Need to rebuild inner since it's Arc-wrapped
         let inner = Arc::get_mut(&mut self.inner).expect("AppState already shared");
         inner.federation = Some(client);
+        self
+    }
+
+    /// Attach a transaction sender for queuing outbound federation PDUs and EDUs.
+    pub fn with_transaction_sender(mut self, sender: Arc<TransactionSender>) -> Self {
+        let inner = Arc::get_mut(&mut self.inner).expect("AppState already shared");
+        inner.transaction_sender = Some(sender);
         self
     }
 
@@ -157,6 +168,14 @@ impl AppState {
     /// rooms, fetching remote user profiles).
     pub fn federation(&self) -> Option<&FederationClient> {
         self.inner.federation.as_deref()
+    }
+
+    /// Access the outbound federation transaction sender, if configured.
+    ///
+    /// Returns `None` when federation is disabled. Used to queue EDUs
+    /// (device list updates, typing, presence) for delivery to remote servers.
+    pub fn transaction_sender(&self) -> Option<&TransactionSender> {
+        self.inner.transaction_sender.as_deref()
     }
 
     /// This homeserver's server name (e.g. `example.com`).

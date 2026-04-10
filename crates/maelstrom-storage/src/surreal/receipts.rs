@@ -29,13 +29,13 @@ impl ReceiptStore for SurrealStorage {
         room_id: &str,
         receipt_type: &str,
         event_id: &str,
-        thread_id: Option<&str>,
+        thread_id: &str,
     ) -> StorageResult<()> {
         let uid = user_id.to_string();
         let rid = room_id.to_string();
         let rtype = receipt_type.to_string();
         let eid = event_id.to_string();
-        let tid = thread_id.map(|s| s.to_string()).unwrap_or_default();
+        let tid = thread_id.to_string();
 
         // Atomic upsert via transaction: delete existing then create new.
         // Thread-aware: delete matching (user, room, type, thread_id) then create.
@@ -76,7 +76,7 @@ impl ReceiptStore for SurrealStorage {
                 receipt_type: r.receipt_type,
                 event_id: r.event_id,
                 ts: r.ts as u64,
-                thread_id: r.thread_id.filter(|s| !s.is_empty()),
+                thread_id: r.thread_id.unwrap_or_default(),
             })
             .collect())
     }

@@ -57,7 +57,9 @@ async fn set_typing(
         return Err(MatrixError::forbidden("Cannot set typing for another user"));
     }
 
-    let timeout_ms = body.timeout.unwrap_or(30000);
+    // Ensure a minimum timeout so typing doesn't expire before the next
+    // sync can pick it up.  The spec default is ~30 s; clamp to at least 10 s.
+    let timeout_ms = body.timeout.unwrap_or(30000).max(10000);
 
     state
         .ephemeral()

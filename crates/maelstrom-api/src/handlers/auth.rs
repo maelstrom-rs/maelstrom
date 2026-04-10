@@ -224,6 +224,30 @@ async fn post_login(
         )
         .await;
 
+    // Notify remote servers about new device via federation EDU
+    if let Some(sender) = state.transaction_sender() {
+        let remote_servers = crate::handlers::util::servers_sharing_rooms(
+            state.storage(),
+            user_id.as_ref(),
+            state.server_name().as_str(),
+        )
+        .await;
+        for server in remote_servers {
+            sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.device_list_update",
+                    "content": {
+                        "user_id": user_id.to_string(),
+                        "device_id": device_id,
+                        "stream_id": change_pos,
+                        "deleted": false,
+                    }
+                }),
+            );
+        }
+    }
+
     // Notify all rooms the user is in so other users' syncs wake up
     if let Ok(rooms) = state.storage().get_joined_rooms(user_id.as_ref()).await {
         for room_id in rooms {
@@ -248,11 +272,49 @@ async fn post_logout(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
+    let user_id = auth.user_id.to_string();
+    let device_id = auth.device_id.to_string();
+
     state
         .storage()
         .remove_device(&auth.user_id, &auth.device_id)
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // Record device list change and notify remote servers
+    let change_pos = state.storage().current_stream_position().await.unwrap_or(0);
+    let _ = state
+        .storage()
+        .set_account_data(
+            &user_id,
+            None,
+            "_maelstrom.device_change_pos",
+            &serde_json::json!({"pos": change_pos}),
+        )
+        .await;
+
+    if let Some(sender) = state.transaction_sender() {
+        let remote_servers = crate::handlers::util::servers_sharing_rooms(
+            state.storage(),
+            &user_id,
+            state.server_name().as_str(),
+        )
+        .await;
+        for server in remote_servers {
+            sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.device_list_update",
+                    "content": {
+                        "user_id": user_id,
+                        "device_id": device_id,
+                        "stream_id": change_pos,
+                        "deleted": true,
+                    }
+                }),
+            );
+        }
+    }
 
     Ok(Json(serde_json::json!({})))
 }
@@ -263,11 +325,47 @@ async fn post_logout_all(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
+    let user_id = auth.user_id.to_string();
+
     state
         .storage()
         .remove_all_devices(&auth.user_id)
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // Record device list change and notify remote servers (all devices removed)
+    let change_pos = state.storage().current_stream_position().await.unwrap_or(0);
+    let _ = state
+        .storage()
+        .set_account_data(
+            &user_id,
+            None,
+            "_maelstrom.device_change_pos",
+            &serde_json::json!({"pos": change_pos}),
+        )
+        .await;
+
+    if let Some(sender) = state.transaction_sender() {
+        let remote_servers = crate::handlers::util::servers_sharing_rooms(
+            state.storage(),
+            &user_id,
+            state.server_name().as_str(),
+        )
+        .await;
+        for server in remote_servers {
+            sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.device_list_update",
+                    "content": {
+                        "user_id": user_id,
+                        "stream_id": change_pos,
+                        "deleted": true,
+                    }
+                }),
+            );
+        }
+    }
 
     Ok(Json(serde_json::json!({})))
 }

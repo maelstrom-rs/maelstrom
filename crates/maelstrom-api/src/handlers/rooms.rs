@@ -469,12 +469,8 @@ async fn join_room_by_alias(
                 .ok_or_else(|| MatrixError::not_found("Remote alias not found"))?
                 .to_string();
 
-            // Use the alias server as a via server for the join
-            let via = query
-                .server_name
-                .clone()
-                .unwrap_or_else(|| vec![alias_server.to_string()]);
-            do_join(&state, &auth, &room_id, extra.as_ref(), Some(&via)).await
+            let via = query.server_name.as_deref().unwrap_or(alias_server);
+            do_join(&state, &auth, &room_id, extra.as_ref(), Some(via)).await
         }
     } else {
         // Room ID directly
@@ -491,7 +487,7 @@ async fn join_room_by_alias(
 
 #[derive(serde::Deserialize, Default)]
 struct JoinQuery {
-    server_name: Option<Vec<String>>,
+    server_name: Option<String>,
 }
 
 // -- POST /rooms/{roomId}/join --
@@ -523,7 +519,7 @@ async fn do_join(
     auth: &AuthenticatedUser,
     room_id: &str,
     extra_content: Option<&serde_json::Value>,
-    via_servers: Option<&[String]>,
+    via_server: Option<&str>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let storage = state.storage();
     let sender = auth.user_id.to_string();
@@ -533,7 +529,7 @@ async fn do_join(
 
     if !room_exists_locally {
         // Room not local — attempt federation join
-        return do_federation_join(state, &sender, room_id, via_servers).await;
+        return do_federation_join(state, &sender, room_id, via_server).await;
     }
 
     // Check join rules
@@ -609,7 +605,7 @@ async fn do_federation_join(
     state: &AppState,
     sender: &str,
     room_id: &str,
-    via_servers: Option<&[String]>,
+    via_server: Option<&str>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let fed = state
         .federation()
@@ -618,10 +614,8 @@ async fn do_federation_join(
     let my_server = state.server_name().as_str();
 
     // Determine which server to join through
-    let target_server = if let Some(via) = via_servers
-        && let Some(first) = via.first()
-    {
-        first.clone()
+    let target_server = if let Some(server) = via_server {
+        server.to_string()
     } else {
         let s = server_name_from_sigil_id(room_id);
         if s.is_empty() {
@@ -946,8 +940,13 @@ async fn invite_to_room(
         }
     }
 
-    // Check if target user is local or remote
+    // Check server ACL for the invited user's server
     let target_server = server_name_from_sigil_id(&body.user_id);
+    if !target_server.is_empty() {
+        crate::handlers::util::check_server_acl(storage, &room_id, target_server).await?;
+    }
+
+    // Check if target user is local or remote
     let is_remote = target_server != state.server_name().as_str();
 
     if is_remote {

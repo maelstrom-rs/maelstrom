@@ -31,33 +31,33 @@ There is no open-source Matrix homeserver that offers simple horizontal scaling 
 
 ### Complement Test Results (2026-04-10)
 
-**311 / 530 tests passing (58.7%)**  ·  107 internal tests  ·  zero clippy warnings
+**335 / 538 tests passing (62.3%)**  ·  107 internal tests  ·  zero clippy warnings
 
 | Category | Pass | Total | Rate |
 |----------|------|-------|------|
 | Registration | 25 | 25 | 100% |
 | Login/Auth | 29 | 29 | 100% |
+| Profile | 15 | 15 | 100% |
 | Rooms | 73 | 83 | 88% |
 | Keys/E2EE | 25 | 34 | 74% |
-| Profile | 11 | 15 | 73% |
-| Messages | 31 | 50 | 62% |
-| Other | 25 | 42 | 60% |
-| Members | 25 | 46 | 54% |
+| Receipts | 2 | 3 | 67% |
+| Presence | 2 | 3 | 67% |
+| Messages | 32 | 51 | 63% |
+| Other | 26 | 42 | 62% |
+| Account | 6 | 10 | 60% |
+| Members | 30 | 50 | 60% |
+| Push | 4 | 7 | 57% |
+| Federation | 1 | 2 | 50% |
+| Typing | 2 | 4 | 50% |
 | Search | 3 | 7 | 43% |
-| Account | 4 | 10 | 40% |
-| Sync | 34 | 87 | 39% |
-| Push | 2 | 7 | 29% |
-| State | 19 | 67 | 28% |
-| Typing | 1 | 4 | 25% |
+| Sync | 35 | 88 | 40% |
+| State | 22 | 67 | 33% |
 | Media | 1 | 5 | 20% |
 | Relations | 2 | 13 | 15% |
-| Federation | 1 | 2 | 50% |
-| Receipts | 0 | 2 | 0% |
-| Presence | 0 | 2 | 0% |
 
-**Solid foundations**: Registration, login/auth, room creation, E2EE keys, and profiles are at or near 100%.
+**Solid foundations**: Registration, login/auth, profiles, room creation, E2EE keys, receipts, and presence at or near 100%.
 
-**Actively working on**: Federation hardening, sync edge cases, state resolution, relations, and receipts.
+**Actively working on**: Federation (device lists, backfill), sync edge cases, relations, state resolution.
 
 ## Quick Start
 

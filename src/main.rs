@@ -393,6 +393,19 @@ async fn main() -> Result<()> {
             config.server.complement_ca.as_deref(),
         ));
 
+    // Build outbound federation transaction sender
+    let transaction_sender =
+        std::sync::Arc::new(maelstrom_federation::sender::TransactionSender::new(
+            maelstrom_federation::client::FederationClient::with_ca(
+                signing_key.clone(),
+                server_name.clone(),
+                config.server.complement_ca.as_deref(),
+            ),
+            server_name.to_string(),
+        ));
+    // Spawn the sender background loop
+    tokio::spawn(transaction_sender.clone().run());
+
     // Build federation state and router
     let federation_state = maelstrom_federation::FederationState::new(
         storage.clone(),
@@ -438,7 +451,9 @@ async fn main() -> Result<()> {
             config.server.public_base_url,
         )
     };
-    let state = state.with_federation(federation_client);
+    let state = state
+        .with_federation(federation_client)
+        .with_transaction_sender(transaction_sender);
 
     let app = maelstrom_api::router::build(state)
         .merge(federation_router)

@@ -167,7 +167,7 @@ fi
 
 # -- Build Maelstrom Complement image --
 echo -e "${YELLOW}Building Maelstrom Complement Docker image...${NC}"
-docker build -q -t "$IMAGE_NAME" -f "$PROJECT_DIR/Dockerfile.complement" "$PROJECT_DIR"
+docker build -t "$IMAGE_NAME" -f "$PROJECT_DIR/Dockerfile.complement" "$PROJECT_DIR"
 
 # -- Run tests --
 cd "$COMPLEMENT_DIR"
@@ -200,8 +200,10 @@ if [ -n "$FILTER" ]; then
 fi
 
 # Run ALL tests — CS API and federation
+# -parallel: run test cases concurrently (default is GOMAXPROCS which is fine)
+# -timeout: generous timeout for the full suite
 set +e
-go test -json -count=1 -timeout 30m $RUN_ARG ./tests/... > "$RESULTS_FILE" 2>&1
+go test -json -count=1 -timeout 30m -parallel "${COMPLEMENT_PARALLEL:-4}" $RUN_ARG ./tests/... > "$RESULTS_FILE" 2>&1
 TEST_EXIT=$?
 set -e
 

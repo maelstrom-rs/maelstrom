@@ -313,10 +313,18 @@ impl UserStore for SurrealStorage {
             } else {
                 localpart_lower.contains(&term_lower)
             };
-            let name_matches = display_name
-                .as_ref()
-                .map(|n| n.to_lowercase().contains(&term_lower))
-                .unwrap_or(false);
+            // When the search term is a full mxid (@user:server), only match
+            // on exact localpart — don't also fuzzy-match display names, which
+            // would return unrelated users whose names happen to contain the
+            // localpart substring.
+            let name_matches = if is_mxid {
+                false
+            } else {
+                display_name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(&term_lower))
+                    .unwrap_or(false)
+            };
 
             if localpart_matches || name_matches {
                 results.push((localpart, display_name, avatar_url));

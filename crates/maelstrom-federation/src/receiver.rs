@@ -135,7 +135,7 @@ async fn receive_transaction(
 async fn process_pdu(
     state: &FederationState,
     pdu_json: &serde_json::Value,
-    _origin: &str,
+    origin: &str,
 ) -> Result<(), MatrixError> {
     // Extract required fields
     let event_id = pdu_json
@@ -167,6 +167,9 @@ async fn process_pdu(
         .get("origin_server_ts")
         .and_then(|e| e.as_u64())
         .unwrap_or(0);
+
+    // Check server ACL -- deny the origin server if the room's ACL blocks it
+    check_server_acl(state.storage(), room_id, origin).await?;
 
     // Check if event already exists
     if state.storage().get_event(event_id).await.is_ok() {
@@ -295,7 +298,7 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
                                 debug!(room_id = %room_id, user_id = %user_id, event_id = %event_id, "Federation receipt EDU");
                                 let _ = state
                                     .storage()
-                                    .set_receipt(user_id, room_id, "m.read", event_id, None)
+                                    .set_receipt(user_id, room_id, "m.read", event_id, "")
                                     .await;
                             }
                         }
@@ -338,4 +341,74 @@ async fn process_edu(state: &FederationState, edu: &serde_json::Value) {
             debug!(edu_type = %other, "Unhandled federation EDU type");
         }
     }
+}
+
+/// Check if a server is allowed by the room's `m.room.server_acl` state event.
+///
+/// Returns `Ok(())` if the server is allowed (or no ACL event exists).
+/// Returns `Err(MatrixError::forbidden)` if the server is denied.
+async fn check_server_acl(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+    server_name: &str,
+) -> Result<(), MatrixError> {
+    use maelstrom_core::matrix::room::event_type as et;
+
+    let acl_event = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
+        Ok(event) => event,
+        Err(_) => return Ok(()),
+    };
+
+    let content = &acl_event.content;
+    let allow_ip_literals = content
+        .get("allow_ip_literals")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let allow = content
+        .get("allow")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let deny = content
+        .get("deny")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if !allow_ip_literals {
+        let host = server_name.split(':').next().unwrap_or(server_name);
+        let first_char = host.chars().next().unwrap_or(' ');
+        if first_char.is_ascii_digit() || first_char == '[' {
+            return Err(MatrixError::forbidden(
+                "Server ACL denies IP literal server names",
+            ));
+        }
+    }
+
+    for pattern in &deny {
+        if server_acl_glob_match(pattern, server_name) {
+            return Err(MatrixError::forbidden("Server is denied by room ACL"));
+        }
+    }
+
+    if allow.is_empty() {
+        return Err(MatrixError::forbidden("Server ACL allows no servers"));
+    }
+    for pattern in &allow {
+        if server_acl_glob_match(pattern, server_name) {
+            return Ok(());
+        }
+    }
+
+    Err(MatrixError::forbidden("Server not in room ACL allow list"))
+}
+
+fn server_acl_glob_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return value.ends_with(suffix);
+    }
+    pattern == value
 }

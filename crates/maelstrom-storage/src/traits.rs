@@ -368,7 +368,7 @@ pub trait ReceiptStore: Send + Sync {
         room_id: &str,
         receipt_type: &str,
         event_id: &str,
-        thread_id: Option<&str>,
+        thread_id: &str,
     ) -> StorageResult<()>;
     async fn get_receipts(&self, room_id: &str) -> StorageResult<Vec<ReceiptRecord>>;
 }
@@ -376,15 +376,15 @@ pub trait ReceiptStore: Send + Sync {
 /// Receipt record.
 ///
 /// Represents a single read receipt.  `receipt_type` is typically `"m.read"`
-/// or `"m.read.private"`.  `thread_id` is `Some` when the receipt applies to
-/// a specific thread rather than the room timeline.
+/// or `"m.read.private"`.  `thread_id` is empty for unthreaded receipts,
+/// `"main"` for the main timeline, or an event ID for a specific thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptRecord {
     pub user_id: String,
     pub receipt_type: String,
     pub event_id: String,
     pub ts: u64,
-    pub thread_id: Option<String>,
+    pub thread_id: String,
 }
 
 /// End-to-end encryption (E2EE) key storage.

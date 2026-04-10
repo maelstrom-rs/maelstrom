@@ -84,6 +84,28 @@ async fn get_displayname(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<DisplayNameResponse>, MatrixError> {
+    if let Some((server, _)) = parse_remote_user(&user_id, &state)? {
+        let fed = state
+            .federation()
+            .ok_or_else(|| MatrixError::not_found("User not found"))?;
+        let encoded = urlencoding::encode(&user_id);
+        let resp = fed
+            .get(
+                &server,
+                &format!(
+                    "/_matrix/federation/v1/query/profile?user_id={encoded}&field=displayname"
+                ),
+            )
+            .await
+            .map_err(|_| MatrixError::not_found("User not found"))?;
+        return Ok(Json(DisplayNameResponse {
+            displayname: resp
+                .get("displayname")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        }));
+    }
+
     let localpart = extract_localpart(&user_id)?;
 
     let profile = state
@@ -139,6 +161,26 @@ async fn get_avatar_url(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<AvatarUrlResponse>, MatrixError> {
+    if let Some((server, _)) = parse_remote_user(&user_id, &state)? {
+        let fed = state
+            .federation()
+            .ok_or_else(|| MatrixError::not_found("User not found"))?;
+        let encoded = urlencoding::encode(&user_id);
+        let resp = fed
+            .get(
+                &server,
+                &format!("/_matrix/federation/v1/query/profile?user_id={encoded}&field=avatar_url"),
+            )
+            .await
+            .map_err(|_| MatrixError::not_found("User not found"))?;
+        return Ok(Json(AvatarUrlResponse {
+            avatar_url: resp
+                .get("avatar_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        }));
+    }
+
     let localpart = extract_localpart(&user_id)?;
 
     let profile = state
@@ -196,6 +238,30 @@ async fn get_profile(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<FullProfileResponse>, MatrixError> {
+    if let Some((server, _)) = parse_remote_user(&user_id, &state)? {
+        let fed = state
+            .federation()
+            .ok_or_else(|| MatrixError::not_found("User not found"))?;
+        let encoded = urlencoding::encode(&user_id);
+        let resp = fed
+            .get(
+                &server,
+                &format!("/_matrix/federation/v1/query/profile?user_id={encoded}"),
+            )
+            .await
+            .map_err(|_| MatrixError::not_found("User not found"))?;
+        return Ok(Json(FullProfileResponse {
+            displayname: resp
+                .get("displayname")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            avatar_url: resp
+                .get("avatar_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        }));
+    }
+
     let localpart = extract_localpart(&user_id)?;
 
     let profile = state
@@ -260,6 +326,26 @@ async fn search_user_directory(
         "results": results,
         "limited": false,
     })))
+}
+
+/// Parse a user ID and check if it belongs to a remote server.
+///
+/// Returns `Some((server_name, localpart))` if the user is on a remote server,
+/// `None` if the user is local, or an error if the user ID is invalid.
+fn parse_remote_user(
+    user_id: &str,
+    state: &AppState,
+) -> Result<Option<(String, String)>, MatrixError> {
+    if !user_id.starts_with('@') {
+        return Ok(None);
+    }
+    let parsed = UserId::parse(user_id).map_err(|_| MatrixError::not_found("Invalid user ID"))?;
+    let server = parsed.server_name();
+    if server == state.server_name().as_str() {
+        Ok(None)
+    } else {
+        Ok(Some((server.to_string(), parsed.localpart().to_string())))
+    }
 }
 
 /// Extract localpart from a user ID string (could be `@alice:server` or `alice`).

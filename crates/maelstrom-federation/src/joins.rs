@@ -104,17 +104,17 @@ async fn make_join(
     debug!(room_id = %params.room_id, user_id = %params.user_id, "make_join request");
 
     // Verify room exists
-    state
+    let room = state
         .storage()
         .get_room(&params.room_id)
         .await
         .map_err(|_| MatrixError::not_found("Room not found on this server"))?;
 
-    let room = state
-        .storage()
-        .get_room(&params.room_id)
-        .await
-        .map_err(|_| MatrixError::not_found("Room not found"))?;
+    // Check server ACL for the joining user's server
+    let joining_server = maelstrom_core::matrix::id::server_name_from_sigil_id(&params.user_id);
+    if !joining_server.is_empty() {
+        check_server_acl(state.storage(), &params.room_id, joining_server).await?;
+    }
 
     // Get auth events for the join (create, join_rules, power_levels, current member state)
     let auth_event_ids = get_auth_event_ids(state.storage(), &params.room_id).await;
@@ -165,6 +165,12 @@ async fn send_join(
         .and_then(|s| s.as_str())
         .ok_or_else(|| MatrixError::bad_json("Missing sender"))?
         .to_string();
+
+    // Check server ACL for the joining user's server
+    let joining_server = maelstrom_core::matrix::id::server_name_from_sigil_id(&sender);
+    if !joining_server.is_empty() {
+        check_server_acl(state.storage(), &params.room_id, joining_server).await?;
+    }
 
     let event_type = event_json
         .get("type")
@@ -428,4 +434,69 @@ async fn get_latest_event_ids(
         return events.into_iter().map(|e| e.event_id).collect();
     }
     Vec::new()
+}
+
+/// Check if a server is allowed by the room's `m.room.server_acl` state event.
+async fn check_server_acl(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+    server_name: &str,
+) -> Result<(), MatrixError> {
+    let acl_event = match storage.get_state_event(room_id, et::SERVER_ACL, "").await {
+        Ok(event) => event,
+        Err(_) => return Ok(()),
+    };
+
+    let content = &acl_event.content;
+    let allow_ip_literals = content
+        .get("allow_ip_literals")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let allow = content
+        .get("allow")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let deny = content
+        .get("deny")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if !allow_ip_literals {
+        let host = server_name.split(':').next().unwrap_or(server_name);
+        let first_char = host.chars().next().unwrap_or(' ');
+        if first_char.is_ascii_digit() || first_char == '[' {
+            return Err(MatrixError::forbidden(
+                "Server ACL denies IP literal server names",
+            ));
+        }
+    }
+
+    for pattern in &deny {
+        if server_acl_glob_match(pattern, server_name) {
+            return Err(MatrixError::forbidden("Server is denied by room ACL"));
+        }
+    }
+
+    if allow.is_empty() {
+        return Err(MatrixError::forbidden("Server ACL allows no servers"));
+    }
+    for pattern in &allow {
+        if server_acl_glob_match(pattern, server_name) {
+            return Ok(());
+        }
+    }
+
+    Err(MatrixError::forbidden("Server not in room ACL allow list"))
+}
+
+fn server_acl_glob_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return value.ends_with(suffix);
+    }
+    pattern == value
 }

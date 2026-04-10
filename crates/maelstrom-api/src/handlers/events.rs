@@ -543,6 +543,9 @@ async fn do_set_state(
     // Check power levels — user must have sufficient PL to send this state event.
     // Exception: users can always update their own m.room.member event (profile changes).
     let is_own_member_event = event_type == et::MEMBER && state_key == sender;
+    // Per spec: when state_key starts with @ and matches sender, the user only
+    // needs users_default (typically 0) rather than state_default (typically 50).
+    let is_own_state_key = state_key == sender;
 
     if !is_own_member_event {
         let power_levels = storage
@@ -558,19 +561,28 @@ async fn do_set_state(
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
 
-            // For state events, required PL comes from events[event_type], or state_default
+            // For state events, required PL comes from events[event_type], or state_default.
+            // Exception: if state_key matches sender, use users_default instead of state_default.
+            let default_required = if is_own_state_key {
+                pl_event
+                    .content
+                    .get("users_default")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
+            } else {
+                pl_event
+                    .content
+                    .get("state_default")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(50)
+            };
+
             let required_pl = pl_event
                 .content
                 .get("events")
                 .and_then(|ev| ev.get(event_type))
                 .and_then(|v| v.as_i64())
-                .or_else(|| {
-                    pl_event
-                        .content
-                        .get("state_default")
-                        .and_then(|v| v.as_i64())
-                })
-                .unwrap_or(50);
+                .unwrap_or(default_required);
 
             if user_pl < required_pl {
                 return Err(MatrixError::forbidden(format!(

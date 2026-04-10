@@ -162,6 +162,30 @@ async fn keys_upload(
                 &serde_json::json!({"pos": change_pos}),
             )
             .await;
+
+        // Notify remote servers about device key changes via federation EDU
+        if let Some(sender) = state.transaction_sender() {
+            let remote_servers = crate::handlers::util::servers_sharing_rooms(
+                storage,
+                &user_id,
+                state.server_name().as_str(),
+            )
+            .await;
+            for server in remote_servers {
+                sender.queue_edu(
+                    &server,
+                    serde_json::json!({
+                        "edu_type": "m.device_list_update",
+                        "content": {
+                            "user_id": user_id,
+                            "device_id": device_id,
+                            "stream_id": change_pos,
+                            "deleted": false,
+                        }
+                    }),
+                );
+            }
+        }
     }
 
     // Store one-time keys if provided

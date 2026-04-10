@@ -318,6 +318,11 @@ async fn get_account_data(
             other => crate::extractors::storage_error(other),
         })?;
 
+    // MSC3391 sentinel: treat as deleted
+    if content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true) {
+        return Err(MatrixError::not_found("Account data not found"));
+    }
+
     Ok(Json(content))
 }
 
@@ -333,7 +338,12 @@ async fn put_account_data(
     if content.as_object().is_some_and(|o| o.is_empty()) {
         state
             .storage()
-            .delete_account_data(&sender, None, &data_type)
+            .set_account_data(
+                &sender,
+                None,
+                &data_type,
+                &serde_json::json!({"_msc3391_deleted": true}),
+            )
             .await
             .map_err(crate::extractors::storage_error)?;
     } else {
@@ -368,6 +378,11 @@ async fn get_room_account_data(
             other => crate::extractors::storage_error(other),
         })?;
 
+    // MSC3391 sentinel: treat as deleted
+    if content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true) {
+        return Err(MatrixError::not_found("Account data not found"));
+    }
+
     Ok(Json(content))
 }
 
@@ -383,7 +398,12 @@ async fn put_room_account_data(
     if content.as_object().is_some_and(|o| o.is_empty()) {
         state
             .storage()
-            .delete_account_data(&sender, Some(&room_id), &data_type)
+            .set_account_data(
+                &sender,
+                Some(&room_id),
+                &data_type,
+                &serde_json::json!({"_msc3391_deleted": true}),
+            )
             .await
             .map_err(crate::extractors::storage_error)?;
     } else {
@@ -412,11 +432,24 @@ async fn delete_account_data(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let sender = auth.user_id.to_string();
 
+    // MSC3391: set content to a sentinel so the sync handler can return an
+    // empty-content entry, telling clients the key was cleared. GET will
+    // treat this sentinel as "not found" and return 404.
     state
         .storage()
-        .delete_account_data(&sender, None, &data_type)
+        .set_account_data(
+            &sender,
+            None,
+            &data_type,
+            &serde_json::json!({"_msc3391_deleted": true}),
+        )
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    state
+        .notifier()
+        .notify(crate::notify::Notification::AccountData { user_id: sender })
+        .await;
 
     Ok(Json(serde_json::json!({})))
 }
@@ -428,11 +461,26 @@ async fn delete_room_account_data(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let sender = auth.user_id.to_string();
 
+    // MSC3391: set content to a sentinel so the sync handler can return an
+    // empty-content entry, telling clients the key was cleared.
     state
         .storage()
-        .delete_account_data(&sender, Some(&room_id), &data_type)
+        .set_account_data(
+            &sender,
+            Some(&room_id),
+            &data_type,
+            &serde_json::json!({"_msc3391_deleted": true}),
+        )
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // Notify via room event so sync wakes up for per-room account data
+    state
+        .notifier()
+        .notify(crate::notify::Notification::RoomEvent {
+            room_id: room_id.clone(),
+        })
+        .await;
 
     Ok(Json(serde_json::json!({})))
 }
@@ -593,9 +641,15 @@ fn default_push_rules() -> serde_json::Value {
             {"rule_id": ".m.rule.reaction", "default": true, "enabled": true,
              "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.reaction"}],
              "actions": ["dont_notify"]},
+            {"rule_id": ".m.rule.poll_response", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.poll.response"}],
+             "actions": []},
+            {"rule_id": ".m.rule.poll_start", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.poll.start"}],
+             "actions": ["notify"]},
             {"rule_id": ".org.matrix.msc3930.rule.poll_response", "default": true, "enabled": true,
              "conditions": [{"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.response"}],
-             "actions": ["dont_notify"]},
+             "actions": []},
             {"rule_id": ".org.matrix.msc3930.rule.poll_start", "default": true, "enabled": true,
              "conditions": [{"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.start"}],
              "actions": ["notify"]},
@@ -634,6 +688,42 @@ fn default_push_rules() -> serde_json::Value {
              "actions": ["notify"]},
             {"rule_id": ".m.rule.encrypted", "default": true, "enabled": true,
              "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.room.encrypted"}],
+             "actions": ["notify"]},
+            {"rule_id": ".m.rule.poll_start_one_to_one", "default": true, "enabled": true,
+             "conditions": [
+                 {"kind": "room_member_count", "is": "2"},
+                 {"kind": "event_match", "key": "type", "pattern": "m.poll.start"}
+             ],
+             "actions": ["notify", {"set_tweak": "sound", "value": "default"}]},
+            {"rule_id": ".m.rule.poll_start", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.poll.start"}],
+             "actions": ["notify"]},
+            {"rule_id": ".m.rule.poll_end_one_to_one", "default": true, "enabled": true,
+             "conditions": [
+                 {"kind": "room_member_count", "is": "2"},
+                 {"kind": "event_match", "key": "type", "pattern": "m.poll.end"}
+             ],
+             "actions": ["notify", {"set_tweak": "sound", "value": "default"}]},
+            {"rule_id": ".m.rule.poll_end", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "m.poll.end"}],
+             "actions": ["notify"]},
+            {"rule_id": ".org.matrix.msc3930.rule.poll_start_one_to_one", "default": true, "enabled": true,
+             "conditions": [
+                 {"kind": "room_member_count", "is": "2"},
+                 {"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.start"}
+             ],
+             "actions": ["notify", {"set_tweak": "sound", "value": "default"}]},
+            {"rule_id": ".org.matrix.msc3930.rule.poll_start", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.start"}],
+             "actions": ["notify"]},
+            {"rule_id": ".org.matrix.msc3930.rule.poll_end_one_to_one", "default": true, "enabled": true,
+             "conditions": [
+                 {"kind": "room_member_count", "is": "2"},
+                 {"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.end"}
+             ],
+             "actions": ["notify", {"set_tweak": "sound", "value": "default"}]},
+            {"rule_id": ".org.matrix.msc3930.rule.poll_end", "default": true, "enabled": true,
+             "conditions": [{"kind": "event_match", "key": "type", "pattern": "org.matrix.msc3381.poll.end"}],
              "actions": ["notify"]},
         ]
     })
@@ -1058,6 +1148,50 @@ async fn delete_device(
         .delete_account_data(auth.user_id.as_ref(), None, &notif_key)
         .await;
 
+    // Notify sync so account data deletion is reflected
+    state
+        .notifier()
+        .notify(crate::notify::Notification::AccountData {
+            user_id: auth.user_id.to_string(),
+        })
+        .await;
+
+    // Record device list change and notify remote servers
+    let user_id = auth.user_id.to_string();
+    let change_pos = state.storage().current_stream_position().await.unwrap_or(0);
+    let _ = state
+        .storage()
+        .set_account_data(
+            &user_id,
+            None,
+            "_maelstrom.device_change_pos",
+            &serde_json::json!({"pos": change_pos}),
+        )
+        .await;
+
+    if let Some(sender) = state.transaction_sender() {
+        let remote_servers = crate::handlers::util::servers_sharing_rooms(
+            state.storage(),
+            &user_id,
+            state.server_name().as_str(),
+        )
+        .await;
+        for server in remote_servers {
+            sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.device_list_update",
+                    "content": {
+                        "user_id": user_id,
+                        "device_id": device_id,
+                        "stream_id": change_pos,
+                        "deleted": true,
+                    }
+                }),
+            );
+        }
+    }
+
     Ok((http::StatusCode::OK, Json(serde_json::json!({}))))
 }
 
@@ -1170,7 +1304,7 @@ async fn post_read_markers(
     if let Some(event_id) = &body.read {
         state
             .storage()
-            .set_receipt(&sender, &room_id, "m.read", event_id, None)
+            .set_receipt(&sender, &room_id, "m.read", event_id, "")
             .await
             .map_err(crate::extractors::storage_error)?;
     }
@@ -1179,7 +1313,7 @@ async fn post_read_markers(
     if let Some(event_id) = &body.read_private {
         state
             .storage()
-            .set_receipt(&sender, &room_id, "m.read.private", event_id, None)
+            .set_receipt(&sender, &room_id, "m.read.private", event_id, "")
             .await
             .map_err(crate::extractors::storage_error)?;
     }
