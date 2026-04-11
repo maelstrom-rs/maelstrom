@@ -141,4 +141,25 @@ impl AccountDataStore for SurrealStorage {
 
         Ok(())
     }
+
+    async fn get_account_data_by_type_global(
+        &self,
+        data_type: &str,
+    ) -> StorageResult<serde_json::Value> {
+        let mut response = self
+            .db()
+            .query("SELECT content FROM account_data WHERE data_type = $dtype AND room_id = '' LIMIT 1")
+            .bind(("dtype", data_type.to_string()))
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let rows: Vec<serde_json::Value> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        rows.into_iter()
+            .next()
+            .and_then(|row| row.get("content").cloned())
+            .ok_or(StorageError::NotFound)
+    }
 }

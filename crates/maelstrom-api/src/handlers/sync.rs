@@ -394,9 +394,11 @@ async fn sync(
         None
     };
 
-    // Check ephemeral events (typing, receipts) before deciding to long-poll
+    // Check ephemeral events (typing, receipts) before deciding to long-poll.
+    // force_ephemeral=false: before long-poll, only include rooms with active
+    // ephemeral data (non-empty typing or receipts).
     let mut join_map =
-        add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms).await?;
+        add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms, false).await?;
 
     // Add per-room account_data to rooms in the join map
     if !is_initial {
@@ -406,21 +408,19 @@ async fn sync(
                 .await
                 .unwrap_or_default();
             if !room_ad.is_empty() {
-                room_response.account_data = Some(AccountDataResponse {
-                    events: room_ad
-                        .into_iter()
-                        .map(|(dtype, content)| {
-                            // MSC3391: expose deleted entries with empty content
-                            if content.get("_msc3391_deleted").and_then(|v| v.as_bool())
-                                == Some(true)
-                            {
-                                serde_json::json!({ "type": dtype, "content": {} })
-                            } else {
-                                serde_json::json!({ "type": dtype, "content": content })
-                            }
-                        })
-                        .collect(),
-                });
+                // MSC3391: filter out deleted room account data entries entirely
+                let events: Vec<_> = room_ad
+                    .into_iter()
+                    .filter(|(_, content)| {
+                        content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+                    })
+                    .map(
+                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
+                    )
+                    .collect();
+                if !events.is_empty() {
+                    room_response.account_data = Some(AccountDataResponse { events });
+                }
             }
         }
     }
@@ -457,20 +457,17 @@ async fn sync(
                 .await
                 .unwrap_or_default();
             if !room_ad.is_empty() {
-                let ad_response = AccountDataResponse {
-                    events: room_ad
-                        .into_iter()
-                        .map(|(dtype, content)| {
-                            if content.get("_msc3391_deleted").and_then(|v| v.as_bool())
-                                == Some(true)
-                            {
-                                serde_json::json!({ "type": dtype, "content": {} })
-                            } else {
-                                serde_json::json!({ "type": dtype, "content": content })
-                            }
-                        })
-                        .collect(),
-                };
+                // MSC3391: filter out deleted room account data
+                let events: Vec<_> = room_ad
+                    .into_iter()
+                    .filter(|(_, content)| {
+                        content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+                    })
+                    .map(
+                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
+                    )
+                    .collect();
+                let ad_response = AccountDataResponse { events };
                 if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
                     room_response.account_data = Some(ad_response);
                 } else {
@@ -1113,7 +1110,9 @@ async fn build_incremental_sync_with_ephemeral(
     user_id: &str,
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
     let join_map = build_incremental_sync(storage, joined_rooms, since, user_id, None).await?;
-    add_ephemeral_events(storage, ephemeral, join_map, joined_rooms).await
+    // force_ephemeral=true: after long-poll wake-up, always include ephemeral
+    // for all joined rooms so typing-stop (empty user_ids) is delivered.
+    add_ephemeral_events(storage, ephemeral, join_map, joined_rooms, true).await
 }
 
 /// Compute device_lists.changed — users in shared rooms whose devices may have changed.
@@ -1125,6 +1124,10 @@ async fn compute_device_lists(
 ) -> DeviceLists {
     let mut changed: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Cache room member lists to avoid redundant storage calls
+    let mut members_cache: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
     // Get all users in shared rooms and check for device changes
     let mut room_users: std::collections::HashSet<String> = std::collections::HashSet::new();
     for room_id in joined_rooms {
@@ -1132,11 +1135,12 @@ async fn compute_device_lists(
             .get_room_members(room_id, Membership::Join.as_str())
             .await
         {
-            for member in members {
+            for member in &members {
                 if member != my_user_id {
-                    room_users.insert(member);
+                    room_users.insert(member.clone());
                 }
             }
+            members_cache.insert(room_id.clone(), members);
         }
     }
 
@@ -1161,40 +1165,72 @@ async fn compute_device_lists(
         let joined_set: std::collections::HashSet<&str> =
             joined_rooms.iter().map(|s| s.as_str()).collect();
         for event in &new_events {
-            if event.event_type == et::MEMBER && joined_set.contains(event.room_id.as_str()) {
-                let target_user = event.state_key.as_deref().unwrap_or(&event.sender);
+            if event.event_type != et::MEMBER {
+                continue;
+            }
+            let target_user = event.state_key.as_deref().unwrap_or(&event.sender);
+            let Some(membership) = event.content.get("membership").and_then(|m| m.as_str()) else {
+                continue;
+            };
 
-                if let Some(membership) = event.content.get("membership").and_then(|m| m.as_str()) {
-                    // When WE join a room, all existing members should appear in changed
-                    // (we need their device keys now that we share a room).
-                    if target_user == my_user_id && membership == Membership::Join.as_str() {
-                        if let Ok(members) = storage
-                            .get_room_members(&event.room_id, Membership::Join.as_str())
-                            .await
-                        {
-                            for member in members {
-                                if member != my_user_id {
-                                    changed.insert(member);
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    if target_user == my_user_id {
-                        continue;
-                    }
-
-                    match membership {
-                        m if m == Membership::Join.as_str() => {
-                            changed.insert(target_user.to_string());
-                        }
-                        m if m == Membership::Leave.as_str() || m == Membership::Ban.as_str() => {
-                            left_candidates.insert(target_user.to_string());
-                        }
-                        _ => {}
+            // When WE join a room, all existing members should appear in changed
+            if target_user == my_user_id && membership == Membership::Join.as_str() {
+                let members = if let Some(cached) = members_cache.get(&event.room_id) {
+                    cached.clone()
+                } else if let Ok(fetched) = storage
+                    .get_room_members(&event.room_id, Membership::Join.as_str())
+                    .await
+                {
+                    members_cache.insert(event.room_id.clone(), fetched.clone());
+                    fetched
+                } else {
+                    Vec::new()
+                };
+                for member in members {
+                    if member != my_user_id {
+                        changed.insert(member);
                     }
                 }
+                continue;
+            }
+
+            // When WE leave a room, users who were only in that room with us go to left
+            if target_user == my_user_id
+                && (membership == Membership::Leave.as_str()
+                    || membership == Membership::Ban.as_str())
+            {
+                let members = if let Some(cached) = members_cache.get(&event.room_id) {
+                    cached.clone()
+                } else if let Ok(fetched) = storage
+                    .get_room_members(&event.room_id, Membership::Join.as_str())
+                    .await
+                {
+                    members_cache.insert(event.room_id.clone(), fetched.clone());
+                    fetched
+                } else {
+                    Vec::new()
+                };
+                for member in members {
+                    if member != my_user_id {
+                        left_candidates.insert(member);
+                    }
+                }
+                continue;
+            }
+
+            // For other users' membership changes in rooms we're still in
+            if target_user == my_user_id || !joined_set.contains(event.room_id.as_str()) {
+                continue;
+            }
+
+            match membership {
+                m if m == Membership::Join.as_str() => {
+                    changed.insert(target_user.to_string());
+                }
+                m if m == Membership::Leave.as_str() || m == Membership::Ban.as_str() => {
+                    left_candidates.insert(target_user.to_string());
+                }
+                _ => {}
             }
         }
     }
@@ -1218,6 +1254,7 @@ async fn add_ephemeral_events(
     ephemeral: &maelstrom_core::matrix::ephemeral::EphemeralStore,
     mut join_map: HashMap<String, JoinedRoomResponse>,
     joined_rooms: &[String],
+    force_ephemeral: bool,
 ) -> Result<HashMap<String, JoinedRoomResponse>, MatrixError> {
     for room_id in joined_rooms {
         // Build ephemeral events for this room
@@ -1278,7 +1315,7 @@ async fn add_ephemeral_events(
         if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
             // Room already in response — always attach ephemeral events.
             room_response.ephemeral.events = ephemeral_events;
-        } else if has_active_ephemeral {
+        } else if has_active_ephemeral || force_ephemeral {
             // New room entry only for active typing or receipts.
             join_map.insert(
                 room_id.clone(),

@@ -82,6 +82,8 @@ pub struct MockStorage {
     relations: Mutex<Vec<RelationRecord>>,
     /// Event reports
     reports: Mutex<Vec<ReportRecord>>,
+    /// Application service registrations
+    appservices: Mutex<Vec<AppServiceRecord>>,
 }
 
 impl MockStorage {
@@ -474,12 +476,16 @@ impl RoomStore for MockStorage {
         let total = public_room_ids.len();
         let start = since.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
 
+        // Build a lookup map to avoid O(N) scans per event_id
+        let event_map: HashMap<&str, &Pdu> =
+            events.iter().map(|e| (e.event_id.as_str(), e)).collect();
+
         let mut public_rooms: Vec<PublicRoom> = Vec::new();
         for rid in public_room_ids.iter().skip(start).take(limit) {
             // Get name from room_state
             let name = room_state
                 .get(&(rid.clone(), et::NAME.to_string(), String::new()))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| {
                     e.content
                         .get("name")
@@ -490,7 +496,7 @@ impl RoomStore for MockStorage {
             // Get topic from room_state
             let topic = room_state
                 .get(&(rid.clone(), et::TOPIC.to_string(), String::new()))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| {
                     e.content
                         .get("topic")
@@ -511,7 +517,7 @@ impl RoomStore for MockStorage {
                     et::HISTORY_VISIBILITY.to_string(),
                     String::new(),
                 ))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| e.content.get("history_visibility").and_then(|v| v.as_str()))
                 .map(|v| v == HistoryVisibility::WorldReadable.as_str())
                 .unwrap_or(false);
@@ -519,7 +525,7 @@ impl RoomStore for MockStorage {
             // Check guest_can_join
             let guest_can_join = room_state
                 .get(&(rid.clone(), et::GUEST_ACCESS.to_string(), String::new()))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| e.content.get("guest_access").and_then(|v| v.as_str()))
                 .map(|v| v == "can_join")
                 .unwrap_or(false);
@@ -547,7 +553,7 @@ impl RoomStore for MockStorage {
                     "m.room.canonical_alias".to_string(),
                     String::new(),
                 ))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| {
                     e.content
                         .get("alias")
@@ -558,7 +564,7 @@ impl RoomStore for MockStorage {
             // Get avatar URL
             let avatar_url = room_state
                 .get(&(rid.clone(), "m.room.avatar".to_string(), String::new()))
-                .and_then(|eid| events.iter().find(|e| e.event_id == *eid))
+                .and_then(|eid| event_map.get(eid.as_str()))
                 .and_then(|e| {
                     e.content
                         .get("url")
@@ -720,10 +726,13 @@ impl EventStore for MockStorage {
             .map(|(_, eid)| eid.clone())
             .collect();
 
+        let event_map: HashMap<&str, &Pdu> =
+            events.iter().map(|e| (e.event_id.as_str(), e)).collect();
+
         let mut result = Vec::new();
         for event_id in &event_ids {
-            if let Some(event) = events.iter().find(|e| e.event_id == *event_id) {
-                result.push(event.clone());
+            if let Some(event) = event_map.get(event_id.as_str()) {
+                result.push((*event).clone());
             }
         }
         Ok(result)
@@ -841,6 +850,14 @@ impl EventStore for MockStorage {
             event.content = serde_json::json!({});
         }
         Ok(())
+    }
+
+    async fn store_backfill_event(&self, event: &Pdu) -> StorageResult<i64> {
+        let pos = -(event.origin_server_ts as i64 / 1000);
+        let mut stored = event.clone();
+        stored.stream_position = pos;
+        self.events.lock().unwrap().push(stored);
+        Ok(pos)
     }
 }
 
@@ -1148,6 +1165,19 @@ impl AccountDataStore for MockStorage {
         ));
         Ok(())
     }
+
+    async fn get_account_data_by_type_global(
+        &self,
+        data_type: &str,
+    ) -> StorageResult<serde_json::Value> {
+        let store = self.account_data.lock().unwrap();
+        for ((_, room_key, dt), value) in store.iter() {
+            if dt == data_type && room_key.is_empty() {
+                return Ok(value.clone());
+            }
+        }
+        Err(StorageError::NotFound)
+    }
 }
 
 #[async_trait]
@@ -1277,6 +1307,11 @@ impl FederationKeyStore for MockStorage {
         let store = self.federation_txns.lock().unwrap();
         Ok(store.contains(&(origin.to_string(), txn_id.to_string())))
     }
+
+    async fn cleanup_old_federation_txns(&self, _max_age_secs: u64) -> StorageResult<u64> {
+        // Mock storage does not track timestamps -- no-op.
+        Ok(0)
+    }
 }
 
 #[async_trait]
@@ -1349,6 +1384,51 @@ impl MediaStore for MockStorage {
         records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         records.truncate(limit);
         Ok(records)
+    }
+}
+
+#[async_trait]
+impl ApplicationServiceStore for MockStorage {
+    async fn register_appservice(&self, record: &AppServiceRecord) -> StorageResult<()> {
+        let mut store = self.appservices.lock().unwrap();
+        // Upsert: remove existing entry with same id, then insert.
+        store.retain(|r| r.id != record.id);
+        store.push(record.clone());
+        Ok(())
+    }
+
+    async fn list_appservices(&self) -> StorageResult<Vec<AppServiceRecord>> {
+        Ok(self.appservices.lock().unwrap().clone())
+    }
+
+    async fn get_appservice(&self, id: &str) -> StorageResult<AppServiceRecord> {
+        self.appservices
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn get_appservice_by_token(&self, as_token: &str) -> StorageResult<AppServiceRecord> {
+        self.appservices
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.as_token == as_token)
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn delete_appservice(&self, id: &str) -> StorageResult<()> {
+        let mut store = self.appservices.lock().unwrap();
+        let before = store.len();
+        store.retain(|r| r.id != id);
+        if store.len() == before {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
     }
 }
 

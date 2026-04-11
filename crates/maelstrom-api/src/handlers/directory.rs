@@ -35,6 +35,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::server_name_from_sigil_id;
 use maelstrom_core::matrix::room::{Membership, event_type as et};
 use maelstrom_storage::traits::StorageError;
 
@@ -107,6 +108,30 @@ async fn get_room_alias(
     State(state): State<AppState>,
     Path(room_alias): Path<String>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
+    let alias_server = server_name_from_sigil_id(&room_alias);
+    let local_server = state.server_name().as_str();
+
+    // If the alias belongs to a remote server, query it via federation
+    if !alias_server.is_empty() && alias_server != local_server {
+        let fed = state
+            .federation()
+            .ok_or_else(|| MatrixError::not_found("Room alias not found"))?;
+
+        let encoded_alias = crate::handlers::util::percent_encode(&room_alias);
+        let path = format!(
+            "/_matrix/federation/v1/query/directory?room_alias={}",
+            encoded_alias,
+        );
+
+        let response = fed.get(alias_server, &path).await.map_err(|e| {
+            tracing::warn!(error = %e, alias = %room_alias, "Federation directory query failed");
+            MatrixError::not_found("Room alias not found")
+        })?;
+
+        return Ok(Json(response));
+    }
+
+    // Local alias lookup
     let storage = state.storage();
 
     let room_id = storage
@@ -117,11 +142,9 @@ async fn get_room_alias(
             other => crate::extractors::storage_error(other),
         })?;
 
-    let server_name = state.server_name().as_str().to_string();
-
     Ok(Json(serde_json::json!({
         "room_id": room_id,
-        "servers": [server_name],
+        "servers": [local_server],
     })))
 }
 
@@ -185,6 +208,66 @@ async fn delete_room_alias(
             StorageError::NotFound => MatrixError::not_found("Room alias not found"),
             other => crate::extractors::storage_error(other),
         })?;
+
+    // If this was the canonical alias, clear the m.room.canonical_alias state event
+    if let Ok(canonical_event) = storage
+        .get_state_event(&room_id, et::CANONICAL_ALIAS, "")
+        .await
+    {
+        let is_canonical = canonical_event
+            .content
+            .get("alias")
+            .and_then(|a| a.as_str())
+            == Some(&room_alias);
+        if is_canonical {
+            use maelstrom_core::matrix::event::{Pdu, generate_event_id, timestamp_ms};
+            let event_id = generate_event_id();
+            let auth_events = crate::handlers::util::select_auth_events(
+                storage,
+                &room_id,
+                &sender,
+                et::CANONICAL_ALIAS,
+            )
+            .await;
+            let event = Pdu {
+                event_id: event_id.clone(),
+                room_id: room_id.clone(),
+                sender: sender.clone(),
+                event_type: et::CANONICAL_ALIAS.to_string(),
+                state_key: Some(String::new()),
+                content: serde_json::json!({}),
+                origin_server_ts: timestamp_ms(),
+                unsigned: None,
+                stream_position: 0,
+                origin: None,
+                auth_events: if auth_events.is_empty() {
+                    None
+                } else {
+                    Some(auth_events)
+                },
+                prev_events: None,
+                depth: None,
+                hashes: None,
+                signatures: None,
+            };
+            if let Err(e) = storage.store_event(&event).await {
+                tracing::warn!(error = %e, "Failed to store canonical alias clear event");
+            }
+            if let Err(e) = storage
+                .set_room_state(&room_id, et::CANONICAL_ALIAS, "", &event_id)
+                .await
+            {
+                tracing::warn!(error = %e, "Failed to update canonical alias room state");
+            }
+
+            state
+                .notifier()
+                .notify(crate::notify::Notification::RoomEvent {
+                    room_id: room_id.clone(),
+                })
+                .await;
+        }
+    }
 
     Ok(Json(serde_json::json!({})))
 }

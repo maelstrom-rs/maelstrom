@@ -356,6 +356,10 @@ pub enum ErrorCode {
     /// The room alias in the request is malformed or doesn't resolve.
     #[serde(rename = "M_BAD_ALIAS")]
     BadAlias,
+    /// MSC3706: The room's member list is not yet fully available because a
+    /// partial-state join is still being resolved in the background.
+    #[serde(rename = "org.matrix.msc3706.partial_state")]
+    PartialState,
 }
 
 impl std::fmt::Display for ErrorCode {

@@ -32,12 +32,13 @@ async-trait = "0.1"
 axum = "0.8"
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "request-id", "util", "fs", "normalize-path"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "decompression-gzip", "trace", "request-id", "util", "fs", "normalize-path"] }
 http = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 toml = "0.8"
 
 # Database
@@ -79,6 +80,9 @@ askama = "0.13"
 
 # System info (admin healthcheck)
 sysinfo = "0.33"
+
+# Regex
+regex = "1"
 
 # Utilities
 dashmap = "6"

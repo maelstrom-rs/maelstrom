@@ -20,6 +20,7 @@
 //! | [`MediaStore`]       | Media metadata (the blobs live in object storage).        |
 //! | [`FederationKeyStore`] | Server signing keys and cached remote server keys.      |
 //! | [`RelationStore`]    | Event relations (threads, reactions, edits, reports).      |
+//! | [`ApplicationServiceStore`] | Application service (bridge/bot) registrations.    |
 //! | [`HealthCheck`]      | Liveness probe for the storage backend.                   |
 //!
 //! A blanket `impl<T> Storage for T` means any struct that implements every sub-trait
@@ -353,6 +354,12 @@ pub trait EventStore: Send + Sync {
 
     /// Redact an event — clear its content to `{}`.
     async fn redact_event(&self, event_id: &str) -> StorageResult<()>;
+
+    /// Store a backfilled event with a negative stream position so it sorts
+    /// before all locally-created events.  The position is derived from
+    /// `origin_server_ts` (negated) to keep backfilled events in chronological
+    /// order among themselves while always appearing earlier than local events.
+    async fn store_backfill_event(&self, event: &Pdu) -> StorageResult<i64>;
 }
 
 /// Read receipt storage.
@@ -520,6 +527,16 @@ pub trait AccountDataStore: Send + Sync {
         room_id: Option<&str>,
         data_type: &str,
     ) -> StorageResult<()>;
+
+    /// Look up global account data by type across all users.
+    ///
+    /// Returns the content of the first matching entry. Used by the federation
+    /// OpenID userinfo endpoint to find which user owns a given token without
+    /// knowing the user_id in advance.
+    async fn get_account_data_by_type_global(
+        &self,
+        data_type: &str,
+    ) -> StorageResult<serde_json::Value>;
 }
 
 /// Media metadata record.
@@ -621,6 +638,12 @@ pub trait FederationKeyStore: Send + Sync {
     ) -> StorageResult<Vec<RemoteKeyRecord>>;
     async fn store_federation_txn(&self, origin: &str, txn_id: &str) -> StorageResult<()>;
     async fn has_federation_txn(&self, origin: &str, txn_id: &str) -> StorageResult<bool>;
+
+    /// Delete federation transaction records older than `max_age_secs` seconds.
+    ///
+    /// Called periodically by a background task to prevent unbounded growth of
+    /// the deduplication table.  Returns the number of records removed.
+    async fn cleanup_old_federation_txns(&self, max_age_secs: u64) -> StorageResult<u64>;
 }
 
 /// An event relation record.
@@ -694,6 +717,61 @@ pub trait RelationStore: Send + Sync {
     async fn store_report(&self, report: &ReportRecord) -> StorageResult<()>;
 }
 
+/// Application Service registration record.
+///
+/// Parsed from a YAML registration file. Each AS has a unique ID, URL to
+/// push events to, authentication tokens, and namespace patterns defining
+/// which users/aliases/rooms it controls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppServiceRecord {
+    /// Unique identifier for this application service.
+    pub id: String,
+    /// HTTP URL where the homeserver pushes events to this AS.
+    pub url: String,
+    /// Token the AS uses to authenticate with the homeserver (AS -> HS).
+    pub as_token: String,
+    /// Token the homeserver uses when pushing events to the AS (HS -> AS).
+    pub hs_token: String,
+    /// Localpart of the AS's main bot user (e.g., "slackbridge").
+    pub sender_localpart: String,
+    /// Regex patterns for user IDs this AS controls (e.g., "@slack_.*:server").
+    pub user_namespaces: Vec<NamespaceRule>,
+    /// Regex patterns for room aliases this AS controls.
+    pub alias_namespaces: Vec<NamespaceRule>,
+    /// Whether requests from this AS are rate-limited.
+    pub rate_limited: bool,
+    /// Third-party protocols this AS bridges (e.g., ["slack", "irc"]).
+    pub protocols: Vec<String>,
+}
+
+/// A namespace pattern with exclusivity flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceRule {
+    /// Regex pattern to match against user IDs or room aliases.
+    pub regex: String,
+    /// If true, the HS must reject registration of users/aliases in this
+    /// namespace unless requested by this AS.
+    pub exclusive: bool,
+}
+
+/// Application Service storage.
+///
+/// Manages registration records for application services (bridges, bots).
+/// The homeserver queries these to determine event routing and namespace ownership.
+#[async_trait]
+pub trait ApplicationServiceStore: Send + Sync {
+    /// Register or update an application service.
+    async fn register_appservice(&self, record: &AppServiceRecord) -> StorageResult<()>;
+    /// List all registered application services.
+    async fn list_appservices(&self) -> StorageResult<Vec<AppServiceRecord>>;
+    /// Get an application service by ID.
+    async fn get_appservice(&self, id: &str) -> StorageResult<AppServiceRecord>;
+    /// Look up an application service by its as_token.
+    async fn get_appservice_by_token(&self, as_token: &str) -> StorageResult<AppServiceRecord>;
+    /// Remove an application service registration.
+    async fn delete_appservice(&self, id: &str) -> StorageResult<()>;
+}
+
 /// Health check for storage backends.
 ///
 /// Called by the liveness probe endpoint (`/_health`).  Returns `true` if the
@@ -722,6 +800,7 @@ pub trait Storage:
     + MediaStore
     + FederationKeyStore
     + RelationStore
+    + ApplicationServiceStore
     + HealthCheck
     + Send
     + Sync
@@ -742,6 +821,7 @@ impl<T> Storage for T where
         + MediaStore
         + FederationKeyStore
         + RelationStore
+        + ApplicationServiceStore
         + HealthCheck
         + Send
         + Sync

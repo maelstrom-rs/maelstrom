@@ -265,6 +265,63 @@ impl Pdu {
     pub fn reference_hash(&self) -> String {
         super::signing::reference_hash(&self.to_federation_json())
     }
+
+    /// Parse a `Pdu` from a federation JSON object.
+    ///
+    /// Extracts all fields from the JSON, using defaults for missing optional fields.
+    /// The `event_id` parameter overrides the JSON value (useful when the ID was
+    /// computed from a reference hash rather than read from the wire).
+    pub fn from_federation_json(json: &serde_json::Value, event_id: &str) -> Self {
+        Self {
+            event_id: event_id.to_string(),
+            room_id: json
+                .get("room_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            sender: json
+                .get("sender")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            event_type: json
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            state_key: json
+                .get("state_key")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            content: json
+                .get("content")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
+            origin_server_ts: json
+                .get("origin_server_ts")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            unsigned: json.get("unsigned").cloned(),
+            stream_position: 0,
+            origin: json
+                .get("origin")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            auth_events: json.get("auth_events").and_then(|a| a.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            }),
+            prev_events: json.get("prev_events").and_then(|a| a.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            }),
+            depth: json.get("depth").and_then(|v| v.as_i64()),
+            hashes: json.get("hashes").cloned(),
+            signatures: json.get("signatures").cloned(),
+        }
+    }
 }
 
 /// The client-facing representation of a Matrix event, served in `/sync`, `/messages`,

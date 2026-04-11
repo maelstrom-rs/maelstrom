@@ -27,20 +27,24 @@
 use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use maelstrom_core::matrix::error::MatrixError;
 
 use crate::FederationState;
 
-/// Build the queries sub-router with profile and directory lookup endpoints.
+/// Build the queries sub-router with profile, directory, and public rooms endpoints.
 pub fn routes() -> Router<FederationState> {
     Router::new()
         .route("/_matrix/federation/v1/query/profile", get(query_profile))
         .route(
             "/_matrix/federation/v1/query/directory",
             get(query_directory),
+        )
+        .route(
+            "/_matrix/federation/v1/publicRooms",
+            get(get_public_rooms_fed).post(search_public_rooms_fed),
         )
 }
 
@@ -145,4 +149,152 @@ async fn query_directory(
         "room_id": room_id,
         "servers": [state.server_name().as_str()],
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Federation Public Rooms (spec: Server-Server API § 11.1)
+// ---------------------------------------------------------------------------
+
+/// Query parameters for `GET /_matrix/federation/v1/publicRooms`.
+#[derive(Deserialize, Default)]
+struct PublicRoomsQuery {
+    limit: Option<usize>,
+    since: Option<String>,
+}
+
+/// A single entry in the public room directory response.
+#[derive(Serialize)]
+struct PublicRoomEntry {
+    room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical_alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+    num_joined_members: usize,
+    world_readable: bool,
+    guest_can_join: bool,
+}
+
+/// The public rooms directory response (shared by GET and POST).
+#[derive(Serialize)]
+struct PublicRoomsResponse {
+    chunk: Vec<PublicRoomEntry>,
+    total_room_count_estimate: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_batch: Option<String>,
+}
+
+/// GET /_matrix/federation/v1/publicRooms — list public rooms for remote servers.
+async fn get_public_rooms_fed(
+    State(state): State<FederationState>,
+    Query(query): Query<PublicRoomsQuery>,
+) -> Result<Json<PublicRoomsResponse>, MatrixError> {
+    debug!("Federation publicRooms GET");
+
+    let limit = query.limit.unwrap_or(20).min(100);
+
+    let (rooms, total) = state
+        .storage()
+        .get_public_rooms(limit, query.since.as_deref(), None)
+        .await
+        .map_err(|_| MatrixError::unknown("Failed to fetch public rooms"))?;
+
+    let next_batch = if rooms.len() >= limit {
+        let start = query
+            .since
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        Some((start + rooms.len()).to_string())
+    } else {
+        None
+    };
+
+    let chunk = rooms
+        .into_iter()
+        .map(|r| PublicRoomEntry {
+            room_id: r.room_id,
+            name: r.name,
+            topic: r.topic,
+            canonical_alias: r.canonical_alias,
+            avatar_url: r.avatar_url,
+            num_joined_members: r.num_joined_members,
+            world_readable: r.world_readable,
+            guest_can_join: r.guest_can_join,
+        })
+        .collect();
+
+    Ok(Json(PublicRoomsResponse {
+        chunk,
+        total_room_count_estimate: total,
+        next_batch,
+    }))
+}
+
+/// Request body for `POST /_matrix/federation/v1/publicRooms`.
+#[derive(Deserialize, Default)]
+struct SearchPublicRoomsRequest {
+    limit: Option<usize>,
+    since: Option<String>,
+    filter: Option<PublicRoomsFilter>,
+}
+
+#[derive(Deserialize, Default)]
+struct PublicRoomsFilter {
+    generic_search_term: Option<String>,
+}
+
+/// POST /_matrix/federation/v1/publicRooms — search/filter public rooms for remote servers.
+async fn search_public_rooms_fed(
+    State(state): State<FederationState>,
+    Json(body): Json<SearchPublicRoomsRequest>,
+) -> Result<Json<PublicRoomsResponse>, MatrixError> {
+    debug!("Federation publicRooms POST (search)");
+
+    let limit = body.limit.unwrap_or(20).min(100);
+    let filter_term = body
+        .filter
+        .as_ref()
+        .and_then(|f| f.generic_search_term.as_deref());
+
+    let (rooms, total) = state
+        .storage()
+        .get_public_rooms(limit, body.since.as_deref(), filter_term)
+        .await
+        .map_err(|_| MatrixError::unknown("Failed to fetch public rooms"))?;
+
+    let next_batch = if rooms.len() >= limit {
+        let start = body
+            .since
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        Some((start + rooms.len()).to_string())
+    } else {
+        None
+    };
+
+    let chunk = rooms
+        .into_iter()
+        .map(|r| PublicRoomEntry {
+            room_id: r.room_id,
+            name: r.name,
+            topic: r.topic,
+            canonical_alias: r.canonical_alias,
+            avatar_url: r.avatar_url,
+            num_joined_members: r.num_joined_members,
+            world_readable: r.world_readable,
+            guest_can_join: r.guest_can_join,
+        })
+        .collect();
+
+    Ok(Json(PublicRoomsResponse {
+        chunk,
+        total_room_count_estimate: total,
+        next_batch,
+    }))
 }

@@ -123,5 +123,33 @@ async fn set_presence(
         })
         .await;
 
+    // Send presence EDU to remote servers sharing rooms with this user
+    if let Some(tx_sender) = state.transaction_sender() {
+        let remote_servers = crate::handlers::util::servers_sharing_rooms(
+            state.storage(),
+            &sender,
+            state.server_name().as_str(),
+        )
+        .await;
+        for server in remote_servers {
+            let mut edu_content = serde_json::json!({
+                "user_id": sender,
+                "presence": body.presence,
+                "last_active_ago": 0,
+                "currently_active": body.presence == "online",
+            });
+            if let Some(ref msg) = body.status_msg {
+                edu_content["status_msg"] = serde_json::Value::String(msg.clone());
+            }
+            tx_sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.presence",
+                    "content": edu_content,
+                }),
+            );
+        }
+    }
+
     Ok(Json(serde_json::json!({})))
 }

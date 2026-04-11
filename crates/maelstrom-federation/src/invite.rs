@@ -31,19 +31,20 @@
 //! - `PUT /_matrix/federation/v1/invite/{roomId}/{eventId}` -- receive invite (v1 format)
 
 use axum::extract::{Path, State};
-use axum::routing::put;
+use axum::routing::{post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use maelstrom_core::matrix::error::MatrixError;
-use maelstrom_core::matrix::event::Pdu;
+use maelstrom_core::matrix::event::{self, Pdu};
 use maelstrom_core::matrix::room::Membership;
 use maelstrom_core::matrix::room::event_type as et;
 
 use crate::FederationState;
 
-/// Build the invite sub-router with v1 and v2 invite endpoints.
+/// Build the invite sub-router with v1 and v2 invite endpoints, plus third-party
+/// invite exchange.
 pub fn routes() -> Router<FederationState> {
     Router::new()
         .route(
@@ -53,6 +54,10 @@ pub fn routes() -> Router<FederationState> {
         .route(
             "/_matrix/federation/v1/invite/{roomId}/{eventId}",
             put(receive_invite_v1),
+        )
+        .route(
+            "/_matrix/federation/v2/exchange_third_party_invite/{roomId}",
+            post(exchange_third_party_invite),
         )
 }
 
@@ -213,6 +218,154 @@ async fn store_invite_event(
 
     // Return the event (potentially with our signature added)
     Ok(event_json.clone())
+}
+
+/// POST /_matrix/federation/v2/exchange_third_party_invite/{roomId}
+///
+/// Converts a third-party invite into a real member event. When a user who was
+/// invited by email/phone registers and their identity server confirms the
+/// binding, this endpoint is called to add them to the room.
+async fn exchange_third_party_invite(
+    State(state): State<FederationState>,
+    Path(room_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    debug!(room_id = %room_id, "Exchange third-party invite");
+
+    let sender = body
+        .get("sender")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| MatrixError::bad_json("Missing sender"))?;
+    let event_type = body
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or(et::MEMBER);
+    let state_key = body
+        .get("state_key")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| MatrixError::bad_json("Missing state_key"))?;
+    let content = body
+        .get("content")
+        .cloned()
+        .unwrap_or(serde_json::json!({"membership": Membership::Join.as_str()}));
+
+    // Validate third-party invite token signature if present
+    if let Some(tpi) = content.get("third_party_invite")
+        && let Some(signed) = tpi.get("signed")
+    {
+        let token = signed.get("token").and_then(|t| t.as_str()).unwrap_or("");
+
+        if let Ok(tpi_event) = state
+            .storage()
+            .get_state_event(&room_id, "m.room.third_party_invite", token)
+            .await
+            && let Some(public_keys) = tpi_event
+                .content
+                .get("public_keys")
+                .and_then(|pk| pk.as_array())
+        {
+            let verified = verify_3pi_signature(signed, public_keys);
+            if !verified {
+                warn!(room_id = %room_id, sender = %sender, "Third-party invite signature verification failed");
+                return Err(MatrixError::forbidden(
+                    "Third-party invite signature verification failed",
+                ));
+            }
+        }
+    }
+    let event_id = event::generate_event_id();
+    let pdu = Pdu {
+        event_id: event_id.clone(),
+        room_id: room_id.clone(),
+        sender: sender.to_string(),
+        event_type: event_type.to_string(),
+        state_key: Some(state_key.to_string()),
+        content,
+        origin_server_ts: event::timestamp_ms(),
+        unsigned: None,
+        stream_position: 0,
+        origin: body
+            .get("origin")
+            .and_then(|o| o.as_str())
+            .map(String::from),
+        auth_events: None,
+        prev_events: None,
+        depth: None,
+        hashes: None,
+        signatures: None,
+    };
+
+    let _ = state.storage().store_event(&pdu).await;
+
+    if event_type == et::MEMBER {
+        let membership = pdu
+            .content
+            .get("membership")
+            .and_then(|m| m.as_str())
+            .unwrap_or(Membership::Join.as_str());
+        let _ = state
+            .storage()
+            .set_membership(state_key, &room_id, membership)
+            .await;
+        let _ = state
+            .storage()
+            .set_room_state(&room_id, event_type, state_key, &event_id)
+            .await;
+    }
+
+    Ok(Json(serde_json::json!({})))
+}
+
+/// Verify that a third-party invite's `signed` object has a valid Ed25519 signature
+/// from one of the public keys in the original `m.room.third_party_invite` event.
+fn verify_3pi_signature(signed: &serde_json::Value, public_keys: &[serde_json::Value]) -> bool {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD_NO_PAD;
+
+    // Build canonical content to verify (signed object without the signatures field)
+    let mut to_verify = signed.clone();
+    if let Some(obj) = to_verify.as_object_mut() {
+        obj.remove("signatures");
+    }
+    let canonical = serde_json::to_string(&to_verify).unwrap_or_default();
+
+    let sigs = match signed.get("signatures").and_then(|s| s.as_object()) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    for pk_entry in public_keys {
+        let pk_b64 = match pk_entry.get("public_key").and_then(|k| k.as_str()) {
+            Some(k) => k,
+            None => continue,
+        };
+        let pk_arr: [u8; 32] = match engine
+            .decode(pk_b64)
+            .ok()
+            .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+        {
+            Some(a) => a,
+            None => continue,
+        };
+
+        for (_server, server_sigs) in sigs {
+            if let Some(server_sigs) = server_sigs.as_object() {
+                for (_kid, sig_val) in server_sigs {
+                    if let Some(sig_b64) = sig_val.as_str()
+                        && maelstrom_core::matrix::keys::verify_signature(
+                            &pk_arr,
+                            canonical.as_bytes(),
+                            sig_b64,
+                        )
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 /// Check if a server is allowed by the room's `m.room.server_acl` state event.

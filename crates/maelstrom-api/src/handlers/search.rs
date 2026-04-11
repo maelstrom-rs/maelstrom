@@ -20,6 +20,8 @@
 //!
 //! * [Search](https://spec.matrix.org/v1.12/client-server-api/#search)
 
+use std::collections::HashSet;
+
 use axum::extract::{Query, State};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -56,6 +58,9 @@ struct RoomEventSearch {
     event_context: Option<EventContext>,
     #[serde(default)]
     order_by: Option<String>,
+    /// Pagination token from a previous search response (`next_batch`).
+    #[serde(default)]
+    from: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -86,16 +91,18 @@ async fn search(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let storage = state.storage();
     let user_id = auth.user_id.to_string();
-    let offset = search_query
-        .next_batch
-        .as_deref()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-
     let room_search = body
         .search_categories
         .room_events
         .ok_or_else(|| MatrixError::bad_json("Missing room_events search category"))?;
+
+    // Pagination token: prefer query-string `next_batch`, fall back to body `from`
+    let offset = search_query
+        .next_batch
+        .as_deref()
+        .or(room_search.from.as_deref())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
 
     // Determine which rooms to search
     let mut room_ids = match &room_search.filter {
@@ -107,17 +114,18 @@ async fn search(
     };
 
     // Traverse room upgrade chains to include predecessor rooms in search
-    let mut predecessors = Vec::new();
+    let room_id_set: HashSet<&str> = room_ids.iter().map(|s| s.as_str()).collect();
+    let mut predecessor_set = HashSet::new();
     for room_id in &room_ids {
         if let Ok(preds) = storage.get_room_predecessors(room_id).await {
             for pred in preds {
-                if !room_ids.contains(&pred) && !predecessors.contains(&pred) {
-                    predecessors.push(pred);
+                if !room_id_set.contains(pred.as_str()) {
+                    predecessor_set.insert(pred);
                 }
             }
         }
     }
-    room_ids.extend(predecessors);
+    room_ids.extend(predecessor_set);
 
     let limit = room_search
         .filter

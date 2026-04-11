@@ -356,3 +356,19 @@ DEFINE FIELD IF NOT EXISTS created_at  ON TABLE pusher TYPE datetime DEFAULT tim
 
 DEFINE INDEX IF NOT EXISTS idx_pusher_user ON TABLE pusher FIELDS user_id;
 DEFINE INDEX IF NOT EXISTS idx_pusher_user_pushkey ON TABLE pusher FIELDS user_id, pushkey UNIQUE;
+
+-- =============================================================
+-- Application services (bridges, bots)
+-- =============================================================
+DEFINE TABLE IF NOT EXISTS appservice SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS id               ON TABLE appservice TYPE string;
+DEFINE FIELD IF NOT EXISTS url              ON TABLE appservice TYPE string;
+DEFINE FIELD IF NOT EXISTS as_token         ON TABLE appservice TYPE string;
+DEFINE FIELD IF NOT EXISTS hs_token         ON TABLE appservice TYPE string;
+DEFINE FIELD IF NOT EXISTS sender_localpart ON TABLE appservice TYPE string;
+DEFINE FIELD IF NOT EXISTS user_namespaces  ON TABLE appservice TYPE string DEFAULT "[]";
+DEFINE FIELD IF NOT EXISTS alias_namespaces ON TABLE appservice TYPE string DEFAULT "[]";
+DEFINE FIELD IF NOT EXISTS rate_limited     ON TABLE appservice TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS protocols        ON TABLE appservice TYPE string DEFAULT "[]";
+DEFINE INDEX IF NOT EXISTS idx_appservice_id       ON TABLE appservice FIELDS id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_appservice_as_token ON TABLE appservice FIELDS as_token UNIQUE;

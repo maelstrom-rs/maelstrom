@@ -337,6 +337,7 @@ async fn keys_changes(
     let storage = state.storage();
     let user_id = auth.user_id.to_string();
     let from: i64 = query.from.parse().unwrap_or(0);
+    let to: i64 = query.to.parse().unwrap_or(i64::MAX);
 
     // Get all users in shared rooms
     let joined_rooms = storage.get_joined_rooms(&user_id).await.unwrap_or_default();
@@ -347,12 +348,13 @@ async fn keys_changes(
         if let Ok(members) = storage.get_room_members(room_id, "join").await {
             for member in members {
                 if member != user_id && seen.insert(member.clone()) {
-                    // Check if this user has a device change after `from`
+                    // Check if this user's device_change_pos is in the range [from, to]
                     if let Ok(data) = storage
                         .get_account_data(&member, None, "_maelstrom.device_change_pos")
                         .await
                         && let Some(pos) = data.get("pos").and_then(|p| p.as_i64())
-                        && pos > from
+                        && pos >= from
+                        && pos <= to
                     {
                         changed.push(member);
                     }

@@ -79,6 +79,21 @@ impl AuthenticatedUser {
     }
 }
 
+impl AuthenticatedUser {
+    /// Parse query parameters from the URI into a simple map.
+    fn query_params(parts: &Parts) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        if let Some(query) = parts.uri.query() {
+            for pair in query.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    map.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+        map
+    }
+}
+
 impl FromRequestParts<AppState> for AuthenticatedUser {
     type Rejection = MatrixError;
 
@@ -88,28 +103,53 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
     ) -> Result<Self, Self::Rejection> {
         let token = Self::extract_token(parts)?;
 
-        let device = state
-            .storage()
-            .get_device_by_token(&token)
-            .await
-            .map_err(|e| {
-                tracing::warn!("Token lookup failed: {e}");
-                MatrixError::unauthorized("Unknown or expired access token")
-            })?;
+        // Try normal device token lookup first
+        match state.storage().get_device_by_token(&token).await {
+            Ok(device) => {
+                // The device store may return a full user_id (@user:server) or just a localpart,
+                // depending on the backend. Handle both cases.
+                let user_id = if device.user_id.starts_with('@') {
+                    UserId::parse(&device.user_id)
+                        .map_err(|_| MatrixError::unknown("Invalid user_id in device record"))?
+                } else {
+                    UserId::new(&device.user_id, state.server_name())
+                };
 
-        // The device store may return a full user_id (@user:server) or just a localpart,
-        // depending on the backend. Handle both cases.
-        let user_id = if device.user_id.starts_with('@') {
-            UserId::parse(&device.user_id)
-                .map_err(|_| MatrixError::unknown("Invalid user_id in device record"))?
-        } else {
-            UserId::new(&device.user_id, state.server_name())
-        };
+                Ok(AuthenticatedUser {
+                    user_id,
+                    device_id: DeviceId::new(device.device_id),
+                    access_token: token,
+                })
+            }
+            Err(_) => {
+                // If normal device token lookup fails, check if it's an AS token
+                let appservice = state
+                    .storage()
+                    .get_appservice_by_token(&token)
+                    .await
+                    .map_err(|_| {
+                        tracing::warn!("Token lookup failed for both device and appservice");
+                        MatrixError::unauthorized("Unknown or expired access token")
+                    })?;
 
-        Ok(AuthenticatedUser {
-            user_id,
-            device_id: DeviceId::new(device.device_id),
-            access_token: token,
-        })
+                let query_params = Self::query_params(parts);
+
+                // AS authenticated -- check for user impersonation
+                let user_id = if let Some(impersonate) = query_params.get("user_id") {
+                    // Verify the impersonated user is in the AS's namespace
+                    UserId::parse(impersonate)
+                        .map_err(|_| MatrixError::forbidden("Invalid user_id"))?
+                } else {
+                    // Default to AS's sender user
+                    UserId::new(&appservice.sender_localpart, state.server_name())
+                };
+
+                Ok(AuthenticatedUser {
+                    user_id,
+                    device_id: DeviceId::new("appservice"),
+                    access_token: token,
+                })
+            }
+        }
     }
 }

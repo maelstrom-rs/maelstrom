@@ -39,6 +39,7 @@
 //! 3. Merge it into `router::build()`.
 //! 4. Done -- Axum handles deserialization, serialization, and error mapping for you.
 
+pub mod appservice;
 pub mod extractors;
 pub mod gossip;
 pub mod handlers;

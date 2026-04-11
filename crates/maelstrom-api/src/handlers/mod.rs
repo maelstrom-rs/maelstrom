@@ -38,6 +38,7 @@
 //! and return `Result<Json<...>, MatrixError>`.
 
 pub mod account;
+pub mod appservice;
 pub mod auth;
 pub mod capabilities;
 pub mod directory;

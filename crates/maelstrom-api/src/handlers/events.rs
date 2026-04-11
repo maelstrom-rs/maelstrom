@@ -71,9 +71,11 @@ use serde::{Deserialize, Serialize};
 
 use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_core::matrix::event::{Pdu, generate_event_id, timestamp_ms};
+use maelstrom_core::matrix::id::server_name_from_sigil_id;
 use maelstrom_core::matrix::room::event_type as et;
 use maelstrom_core::matrix::room::{HistoryVisibility, Membership};
 use maelstrom_storage::traits::StorageError;
+use tracing::warn;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
 use crate::handlers::util::require_membership;
@@ -176,6 +178,8 @@ async fn send_event(
 
     // Create event
     let event_id = generate_event_id();
+    let auth_events =
+        crate::handlers::util::select_auth_events(storage, &room_id, &sender, &event_type).await;
     let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.clone(),
@@ -187,7 +191,11 @@ async fn send_event(
         unsigned: Some(serde_json::json!({ "transaction_id": txn_id })),
         stream_position: 0,
         origin: None,
-        auth_events: None,
+        auth_events: if auth_events.is_empty() {
+            None
+        } else {
+            Some(auth_events)
+        },
         prev_events: None,
         depth: None,
         hashes: None,
@@ -395,11 +403,77 @@ async fn get_messages(
         None
     };
 
-    let events = storage
+    let mut events = storage
         .get_room_events(&room_id, from, limit, dir)
         .await
         .map_err(crate::extractors::storage_error)?;
 
+    // If going backward and we got fewer than requested, try federation backfill
+    if dir == "b"
+        && events.len() < limit
+        && let Some(fed_client) = state.federation()
+    {
+        let origin_server = server_name_from_sigil_id(&room_id);
+        if !origin_server.is_empty() && origin_server != state.server_name().as_str() {
+            // Use the earliest local event as anchor, or fall back to the
+            // room creation event when the page is empty.
+            let earliest_event_id = if let Some(last) = events.last() {
+                Some(last.event_id.clone())
+            } else {
+                storage
+                    .get_state_event(&room_id, et::CREATE, "")
+                    .await
+                    .ok()
+                    .map(|e| e.event_id)
+            };
+
+            if let Some(earliest_id) = earliest_event_id {
+                let remaining = limit - events.len();
+                let path = format!(
+                    "/_matrix/federation/v1/backfill/{}?limit={}&v={}",
+                    crate::handlers::util::percent_encode(&room_id),
+                    remaining,
+                    crate::handlers::util::percent_encode(&earliest_id),
+                );
+
+                match fed_client.get(origin_server, &path).await {
+                    Ok(response) => {
+                        if let Some(pdus) = response.get("pdus").and_then(|p| p.as_array()) {
+                            for pdu_json in pdus {
+                                let event_id = pdu_json
+                                    .get("event_id")
+                                    .and_then(|e| e.as_str())
+                                    .unwrap_or_default();
+
+                                // Skip events we already have
+                                if event_id.is_empty() || storage.get_event(event_id).await.is_ok()
+                                {
+                                    continue;
+                                }
+
+                                let stored = Pdu::from_federation_json(pdu_json, event_id);
+                                let _ = storage.store_backfill_event(&stored).await;
+                            }
+
+                            // Re-query to include newly stored events
+                            events = storage
+                                .get_room_events(&room_id, from, limit, dir)
+                                .await
+                                .map_err(crate::extractors::storage_error)?;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            room_id = %room_id,
+                            origin = %origin_server,
+                            error = %e,
+                            "Federation backfill request failed"
+                        );
+                    }
+                }
+            }
+        }
+    }
     // Filter out events after the user left
     let events: Vec<_> = if let Some(lp) = leave_pos {
         events
@@ -676,6 +750,8 @@ async fn do_set_state(
     }
 
     let event_id = generate_event_id();
+    let auth_events =
+        crate::handlers::util::select_auth_events(storage, room_id, &sender, event_type).await;
     let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.to_string(),
@@ -687,7 +763,11 @@ async fn do_set_state(
         unsigned: None,
         stream_position: 0,
         origin: None,
-        auth_events: None,
+        auth_events: if auth_events.is_empty() {
+            None
+        } else {
+            Some(auth_events)
+        },
         prev_events: None,
         depth: None,
         hashes: None,
@@ -904,18 +984,24 @@ async fn redact_event(
 
     // Create the redaction event
     let event_id = generate_event_id();
+    let auth_events =
+        crate::handlers::util::select_auth_events(storage, &room_id, &sender, et::REDACTION).await;
     let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.clone(),
         sender,
-        event_type: "m.room.redaction".to_string(),
+        event_type: et::REDACTION.to_string(),
         state_key: None,
         content: serde_json::Value::Object(content),
         origin_server_ts: timestamp_ms(),
         unsigned: Some(serde_json::json!({ "transaction_id": txn_id })),
         stream_position: 0,
         origin: None,
-        auth_events: None,
+        auth_events: if auth_events.is_empty() {
+            None
+        } else {
+            Some(auth_events)
+        },
         prev_events: None,
         depth: None,
         hashes: None,

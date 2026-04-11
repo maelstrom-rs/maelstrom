@@ -1,6 +1,7 @@
 use axum::Router;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
@@ -32,13 +33,15 @@ pub fn build(state: AppState) -> Router {
         .merge(handlers::threads::routes())
         .merge(handlers::spaces::routes())
         .merge(handlers::knock::routes())
-        .merge(handlers::reporting::routes());
+        .merge(handlers::reporting::routes())
+        .merge(handlers::appservice::routes());
 
     Router::new()
         .merge(client_api)
         .layer(axum::middleware::from_fn(
             crate::middleware::rate_limit::rate_limit_auth,
         ))
+        .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

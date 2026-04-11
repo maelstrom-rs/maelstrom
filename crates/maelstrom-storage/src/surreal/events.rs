@@ -512,6 +512,90 @@ impl EventStore for SurrealStorage {
         Ok(rows.into_iter().map(|r| r.into_pdu()).collect())
     }
 
+    async fn store_backfill_event(&self, event: &Pdu) -> StorageResult<i64> {
+        debug!(event_id = %event.event_id, room_id = %event.room_id, "Storing backfill event");
+
+        // Use negative origin_server_ts so backfilled events sort before all
+        // local events (which have positive, auto-incremented positions).
+        // Dividing by 1000 converts ms -> seconds to stay within i64 range and
+        // still preserve ordering among backfilled events.
+        let pos = -(event.origin_server_ts as i64 / 1000);
+
+        let rid = RecordId::new("event", event.event_id.as_str());
+
+        let mut response = self
+            .db()
+            .query(
+                "INSERT INTO event { \
+                 id: $rid, \
+                 event_id: $event_id, \
+                 room_id: $room_id, \
+                 sender: $sender, \
+                 event_type: $event_type, \
+                 state_key: $state_key, \
+                 content: $content, \
+                 origin_server_ts: $origin_server_ts, \
+                 unsigned_data: $unsigned_data, \
+                 stream_position: $pos, \
+                 origin: $origin, \
+                 auth_events: $auth_events, \
+                 prev_events: $prev_events, \
+                 depth: $depth, \
+                 hashes: $hashes, \
+                 signatures: $signatures \
+                 } ON DUPLICATE KEY UPDATE stream_position = stream_position",
+            )
+            .bind(("rid", rid))
+            .bind(("event_id", event.event_id.clone()))
+            .bind(("room_id", event.room_id.clone()))
+            .bind(("sender", event.sender.clone()))
+            .bind(("event_type", event.event_type.clone()))
+            .bind(("state_key", event.state_key.clone()))
+            .bind(("content", event.content.clone()))
+            .bind(("origin_server_ts", event.origin_server_ts as i64))
+            .bind(("unsigned_data", event.unsigned.clone()))
+            .bind(("pos", pos))
+            .bind(("origin", event.origin.clone()))
+            .bind(("auth_events", event.auth_events.clone()))
+            .bind(("prev_events", event.prev_events.clone()))
+            .bind(("depth", event.depth))
+            .bind(("hashes", event.hashes.clone()))
+            .bind(("signatures", event.signatures.clone()))
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let _: Vec<serde_json::Value> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        // Create DAG graph edges
+        let event_rid = RecordId::new("event", event.event_id.as_str());
+        if let Some(prev) = &event.prev_events {
+            for prev_id in prev {
+                let prev_rid = RecordId::new("event", prev_id.as_str());
+                let _ = self
+                    .db()
+                    .query("RELATE $from->event_edge->$to SET edge_type = 'prev'")
+                    .bind(("from", event_rid.clone()))
+                    .bind(("to", prev_rid))
+                    .await;
+            }
+        }
+        if let Some(auth) = &event.auth_events {
+            for auth_id in auth {
+                let auth_rid = RecordId::new("event", auth_id.as_str());
+                let _ = self
+                    .db()
+                    .query("RELATE $from->event_edge->$to SET edge_type = 'auth'")
+                    .bind(("from", event_rid.clone()))
+                    .bind(("to", auth_rid))
+                    .await;
+            }
+        }
+
+        Ok(pos)
+    }
+
     async fn redact_event(&self, event_id: &str) -> StorageResult<()> {
         debug!(event_id = %event_id, "Redacting event");
 

@@ -182,4 +182,26 @@ impl FederationKeyStore for SurrealStorage {
 
         Ok(!rows.is_empty())
     }
+
+    async fn cleanup_old_federation_txns(&self, max_age_secs: u64) -> StorageResult<u64> {
+        let mut response = self
+            .db()
+            .query("DELETE federation_txn WHERE received_at < time::now() - $age RETURN BEFORE")
+            .bind((
+                "age",
+                surrealdb::types::Duration::from(std::time::Duration::from_secs(max_age_secs)),
+            ))
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let deleted: Vec<serde_json::Value> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let count = deleted.len() as u64;
+        if count > 0 {
+            debug!(count, "Cleaned up old federation transaction records");
+        }
+        Ok(count)
+    }
 }

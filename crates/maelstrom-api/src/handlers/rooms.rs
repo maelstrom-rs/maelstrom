@@ -139,6 +139,11 @@ async fn store_state_event(
     content: serde_json::Value,
 ) -> Result<String, MatrixError> {
     let event_id = generate_event_id();
+
+    // Build auth_events per spec: create, power_levels, join_rules (for member events), sender's member
+    let auth_events =
+        crate::handlers::util::select_auth_events(storage, room_id, sender, event_type).await;
+
     let event = Pdu {
         event_id: event_id.clone(),
         room_id: room_id.to_string(),
@@ -150,7 +155,11 @@ async fn store_state_event(
         unsigned: None,
         stream_position: 0, // Set by store_event()
         origin: None,
-        auth_events: None,
+        auth_events: if auth_events.is_empty() {
+            None
+        } else {
+            Some(auth_events)
+        },
         prev_events: None,
         depth: None,
         hashes: None,
@@ -666,8 +675,9 @@ async fn do_federation_join(
     join_event["event_id"] = serde_json::json!(&event_id);
 
     // Step 3: send_join — send the signed event to the remote server
+    // Request partial state per MSC3706 to speed up the join.
     let send_join_path = format!(
-        "/_matrix/federation/v2/send_join/{}/{}",
+        "/_matrix/federation/v2/send_join/{}/{}?org.matrix.msc3706.partial_state=true",
         crate::handlers::util::percent_encode(room_id),
         crate::handlers::util::percent_encode(&event_id),
     );
@@ -679,7 +689,37 @@ async fn do_federation_join(
             MatrixError::unknown(format!("send_join failed: {e}"))
         })?;
 
-    // Step 4: Process the returned room state — create the room locally and store state
+    // Step 4: Verify the join event was not tampered with by the remote server.
+    // Check that our join event is present in the response and matches what we sent.
+    if let Some(returned_event) = send_join_resp.get("event") {
+        // Verify key fields match what we originally sent
+        let orig_sender = join_event.get("sender").and_then(|v| v.as_str());
+        let resp_sender = returned_event.get("sender").and_then(|v| v.as_str());
+        let orig_type = join_event.get("type").and_then(|v| v.as_str());
+        let resp_type = returned_event.get("type").and_then(|v| v.as_str());
+        let orig_state_key = join_event.get("state_key").and_then(|v| v.as_str());
+        let resp_state_key = returned_event.get("state_key").and_then(|v| v.as_str());
+
+        if orig_sender != resp_sender || orig_type != resp_type || orig_state_key != resp_state_key
+        {
+            tracing::warn!(
+                room_id,
+                "send_join response event fields don't match what we sent — possible tampering"
+            );
+            return Err(MatrixError::unknown(
+                "send_join returned a modified join event",
+            ));
+        }
+    } else {
+        tracing::warn!(room_id, "send_join response did not include the join event");
+    }
+
+    // TODO: Verify signatures on all state events and auth_chain events from their
+    // origin servers. This requires fetching each origin server's signing keys via
+    // the key server APIs and validating ed25519 signatures. For now we trust the
+    // responding server, but this should be implemented for full spec compliance.
+
+    // Step 5: Process the returned room state — create the room locally and store state
     let room_record = maelstrom_storage::traits::RoomRecord {
         room_id: room_id.to_string(),
         version: room_version,
@@ -711,6 +751,38 @@ async fn do_federation_join(
         .set_membership(sender, room_id, Membership::Join.as_str())
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // MSC3706: Check if this was a partial state join and spawn background resync
+    let is_partial = send_join_resp
+        .get("org.matrix.msc3706.partial_state")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if is_partial {
+        tracing::info!(
+            room_id,
+            "Remote server returned partial state, scheduling background resync"
+        );
+
+        // Mark room as partially synced using account data on a synthetic user
+        let _ = storage
+            .set_account_data(
+                &format!("_room:{room_id}"),
+                None,
+                "_maelstrom.partial_state",
+                &serde_json::json!({"partial": true}),
+            )
+            .await;
+
+        // Spawn background resync — AppState is cheap to clone (Arc internally)
+        let bg_state = state.clone();
+        let target = target_server.clone();
+        let rid = room_id.to_string();
+        let eid = event_id.clone();
+        tokio::spawn(async move {
+            resync_room_state(bg_state, target, rid, eid).await;
+        });
+    }
 
     state
         .notifier()
@@ -814,6 +886,117 @@ async fn store_federation_event(
     }
 }
 
+/// MSC3706: Background task to fetch full room state after a partial state join.
+///
+/// When we join a remote room with `org.matrix.msc3706.partial_state=true`, the
+/// responding server may return only the state needed for the join event's auth
+/// chain rather than the full room state. This function runs in the background
+/// to fetch the remaining state events so the room eventually has complete state.
+async fn resync_room_state(
+    state: AppState,
+    target_server: String,
+    room_id: String,
+    event_id: String,
+) {
+    tracing::info!(room_id, "Starting partial state resync");
+
+    let fed = match state.federation() {
+        Some(f) => f,
+        None => {
+            tracing::warn!(room_id, "Federation not available for resync");
+            return;
+        }
+    };
+    let storage = state.storage();
+
+    // 1. Get all state event IDs from the remote server
+    let path = format!(
+        "/_matrix/federation/v1/state_ids/{}?event_id={}",
+        crate::handlers::util::percent_encode(&room_id),
+        crate::handlers::util::percent_encode(&event_id),
+    );
+    let state_ids_resp = match fed.get(&target_server, &path).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(room_id, error = %e, "Failed to fetch state_ids for resync");
+            return;
+        }
+    };
+
+    let pdu_ids: Vec<String> = state_ids_resp
+        .get("pdu_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let auth_chain_ids: Vec<String> = state_ids_resp
+        .get("auth_chain_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 2. Merge all IDs and fetch events we don't have locally
+    let mut all_ids = pdu_ids;
+    all_ids.extend(auth_chain_ids);
+
+    let mut fetched = 0u64;
+    for eid in &all_ids {
+        // Check if the room still exists (user may have left during resync)
+        if storage.get_room(&room_id).await.is_err() {
+            tracing::info!(room_id, "Room no longer exists, aborting resync");
+            return;
+        }
+
+        // Skip events we already have
+        if storage.get_event(eid).await.is_ok() {
+            continue;
+        }
+
+        let event_path = format!(
+            "/_matrix/federation/v1/event/{}",
+            crate::handlers::util::percent_encode(eid),
+        );
+        match fed.get(&target_server, &event_path).await {
+            Ok(resp) => {
+                // The /event response wraps the PDU in a "pdus" array
+                if let Some(pdus) = resp.get("pdus").and_then(|p| p.as_array()) {
+                    for pdu_json in pdus {
+                        store_federation_event(storage, pdu_json).await;
+                    }
+                    fetched += 1;
+                }
+            }
+            Err(e) => {
+                tracing::debug!(event_id = eid, error = %e, "Failed to fetch event during resync");
+            }
+        }
+    }
+
+    // 3. Mark room as fully synced — remove partial state flag
+    let _ = storage
+        .delete_account_data(
+            &format!("_room:{room_id}"),
+            None,
+            "_maelstrom.partial_state",
+        )
+        .await;
+
+    tracing::info!(
+        room_id,
+        total = all_ids.len(),
+        fetched,
+        "Partial state resync complete"
+    );
+}
+
 // -- POST /rooms/{roomId}/leave --
 
 async fn leave_room(
@@ -903,6 +1086,8 @@ async fn leave_room(
 #[derive(Deserialize)]
 struct InviteRequest {
     user_id: String,
+    #[serde(default)]
+    is_direct: Option<bool>,
 }
 
 async fn invite_to_room(
@@ -956,13 +1141,17 @@ async fn invite_to_room(
             .ok_or_else(|| MatrixError::unknown("Federation not configured"))?;
 
         let event_id = generate_event_id();
+        let mut invite_content = serde_json::json!({ "membership": Membership::Invite.as_str() });
+        if let Some(true) = body.is_direct {
+            invite_content["is_direct"] = serde_json::json!(true);
+        }
         let invite_event = serde_json::json!({
             "event_id": event_id,
             "room_id": room_id,
             "sender": sender,
             "type": et::MEMBER,
             "state_key": body.user_id,
-            "content": { "membership": Membership::Invite.as_str() },
+            "content": invite_content,
             "origin": state.server_name().as_str(),
             "origin_server_ts": timestamp_ms(),
             "depth": 100,
@@ -994,18 +1183,22 @@ async fn invite_to_room(
             &sender,
             et::MEMBER,
             &body.user_id,
-            serde_json::json!({ "membership": Membership::Invite.as_str() }),
+            invite_content.clone(),
         )
         .await;
     } else {
         // Local invite
+        let mut local_content = serde_json::json!({ "membership": Membership::Invite.as_str() });
+        if let Some(true) = body.is_direct {
+            local_content["is_direct"] = serde_json::json!(true);
+        }
         store_state_event(
             storage,
             &room_id,
             &sender,
             et::MEMBER,
             &body.user_id,
-            serde_json::json!({ "membership": Membership::Invite.as_str() }),
+            local_content,
         )
         .await?;
     }
@@ -1518,3 +1711,5 @@ async fn upgrade_room(
 
     Ok(Json(serde_json::json!({ "replacement_room": new_room_id })))
 }
+
+// Auth event selection uses crate::handlers::util::select_auth_events

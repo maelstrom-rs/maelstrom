@@ -118,6 +118,13 @@ struct GetMissingEventsRequest {
 }
 
 /// POST /_matrix/federation/v1/get_missing_events/{roomId}
+///
+/// Returns events reachable from `latest_events` but not from
+/// `earliest_events`, up to `limit`.  The implementation approximates DAG
+/// walking by using stream_position ranges: it finds the positions of the
+/// earliest and latest boundary events, then returns all room events whose
+/// stream_position falls strictly between those boundaries, excluding the
+/// boundary events themselves.
 async fn get_missing_events(
     State(state): State<FederationState>,
     Path(room_id): Path<String>,
@@ -131,23 +138,53 @@ async fn get_missing_events(
         "get_missing_events request"
     );
 
+    if body.earliest_events.is_empty() || body.latest_events.is_empty() {
+        return Ok(Json(serde_json::json!({ "events": [] })));
+    }
+
     let limit = body.limit.min(500);
+    let storage = state.storage();
 
-    // Simplified: return recent events in the room up to the limit.
-    // Full implementation would walk the DAG between earliest and latest.
-    let pos = state
-        .storage()
-        .current_stream_position()
-        .await
-        .unwrap_or(i64::MAX);
+    // Determine the stream_position lower bound from earliest_events.
+    // We want events strictly AFTER the earliest frontier.
+    let mut min_pos = i64::MIN;
+    for eid in &body.earliest_events {
+        if let Ok(ev) = storage.get_event(eid).await
+            && ev.stream_position > min_pos
+        {
+            min_pos = ev.stream_position;
+        }
+    }
 
-    let events = state
-        .storage()
-        .get_room_events(&room_id, pos, limit, "b")
+    // Determine the stream_position upper bound from latest_events.
+    // We want events up to and INCLUDING the latest frontier.
+    let mut max_pos = i64::MAX;
+    for eid in &body.latest_events {
+        if let Ok(ev) = storage.get_event(eid).await {
+            // Use the highest latest position as the ceiling
+            if max_pos == i64::MAX || ev.stream_position > max_pos {
+                max_pos = ev.stream_position;
+            }
+        }
+    }
+
+    // Fetch events forward from min_pos (exclusive) — get_room_events with
+    // dir "f" returns events with stream_position > from.
+    let candidates = storage
+        .get_room_events(&room_id, min_pos, limit, "f")
         .await
         .unwrap_or_default();
 
-    let pdus: Vec<serde_json::Value> = events.iter().map(|e| e.to_federation_json()).collect();
+    // Filter to only events at or below max_pos, excluding earliest_events
+    let earliest_set: std::collections::HashSet<&str> =
+        body.earliest_events.iter().map(|s| s.as_str()).collect();
+
+    let pdus: Vec<serde_json::Value> = candidates
+        .iter()
+        .filter(|e| e.stream_position <= max_pos && !earliest_set.contains(e.event_id.as_str()))
+        .take(limit)
+        .map(|e| e.to_federation_json())
+        .collect();
 
     Ok(Json(serde_json::json!({ "events": pdus })))
 }

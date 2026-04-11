@@ -415,6 +415,32 @@ async fn main() -> Result<()> {
     );
     let federation_router = maelstrom_federation::router::build(federation_state);
 
+    // Spawn background task to clean up old federation transaction dedup records.
+    // Runs every hour, deleting records older than 24 hours.
+    {
+        let cleanup_storage = storage.clone();
+        tokio::spawn(async move {
+            use maelstrom_storage::traits::FederationKeyStore;
+            const CLEANUP_INTERVAL_SECS: u64 = 3600; // 1 hour
+            const MAX_TXN_AGE_SECS: u64 = 86_400; // 24 hours
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(CLEANUP_INTERVAL_SECS)).await;
+                match cleanup_storage
+                    .cleanup_old_federation_txns(MAX_TXN_AGE_SECS)
+                    .await
+                {
+                    Ok(count) if count > 0 => {
+                        info!(count, "Federation transaction dedup cleanup complete");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Federation transaction cleanup failed");
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
     // Build admin state and router (with retention config for management)
     let admin_retention = config
         .media

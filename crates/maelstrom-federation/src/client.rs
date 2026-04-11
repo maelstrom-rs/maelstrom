@@ -64,8 +64,17 @@ impl FederationClient {
     }
 
     /// Create a federation client, optionally trusting a specific CA certificate.
-    /// When `ca_path` is provided, the client trusts that CA for TLS verification.
-    /// When absent, falls back to accepting all certificates (dev mode).
+    ///
+    /// # TLS behaviour
+    ///
+    /// - **`ca_path` provided and valid** -- the custom CA is added as a trusted root
+    ///   and normal TLS certificate validation is enforced.  This is the path used by
+    ///   Complement (which generates its own CA for test homeservers).
+    /// - **`ca_path` provided but unreadable/unparseable** -- falls back to accepting
+    ///   *all* certificates so the server can still start.  A warning is logged.
+    /// - **`ca_path` absent** -- accepts all certificates (`danger_accept_invalid_certs`).
+    ///   This keeps development easy but is **insecure for production**.  A real
+    ///   deployment should either provide a CA or use publicly-trusted certificates.
     pub fn with_ca(signing_key: KeyPair, server_name: ServerName, ca_path: Option<&str>) -> Self {
         let mut builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -77,6 +86,7 @@ impl FederationClient {
                 if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
                     debug!(path = %path, "Loaded custom CA certificate for federation");
                     builder = builder.add_root_certificate(cert);
+                    // Valid CA loaded -- do NOT accept invalid certs; enforce real TLS.
                 } else {
                     tracing::warn!(path = %path, "Failed to parse CA certificate, falling back to insecure");
                     builder = builder.danger_accept_invalid_certs(true);
@@ -86,6 +96,8 @@ impl FederationClient {
                 builder = builder.danger_accept_invalid_certs(true);
             }
         } else {
+            // SAFETY: No CA configured -- accept all certs for local development.
+            // This is insecure and should not be used in production deployments.
             builder = builder.danger_accept_invalid_certs(true);
         }
 
@@ -153,33 +165,33 @@ impl FederationClient {
 
     /// Try SRV DNS lookup for `_matrix-fed._tcp.{server_name}`.
     ///
-    /// Uses a system DNS query via tokio's spawn_blocking + std::process.
+    /// Uses hickory-resolver for async-native, pure-Rust DNS resolution.
+    /// The resolver is created once and reused across all calls via a
+    /// function-local static to avoid the overhead of re-reading system
+    /// DNS configuration on every lookup.
     async fn try_srv_lookup(&self, server_name: &str) -> Option<String> {
-        let srv_name = format!("_matrix-fed._tcp.{server_name}");
+        use hickory_resolver::Resolver;
+        use std::sync::OnceLock;
 
-        tokio::task::spawn_blocking(move || {
-            // Use the `dig` command for SRV lookup (available on most Unix systems)
-            let output = std::process::Command::new("dig")
-                .args(["+short", "SRV", &srv_name])
-                .output()
-                .ok()?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse first SRV line: "priority weight port target"
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    let port = parts[2];
-                    let host = parts[3].trim_end_matches('.');
-                    if !host.is_empty() && host != "." {
-                        return Some(format!("https://{host}:{port}"));
-                    }
-                }
+        static RESOLVER: OnceLock<
+            Option<Resolver<hickory_resolver::name_server::TokioConnectionProvider>>,
+        > = OnceLock::new();
+        let resolver = RESOLVER
+            .get_or_init(|| Resolver::builder_tokio().ok().map(|b| b.build()))
+            .as_ref()?;
+        let srv_name = format!("_matrix-fed._tcp.{server_name}.");
+
+        let lookup = resolver.srv_lookup(&srv_name).await.ok()?;
+
+        for record in lookup.iter() {
+            let host = record.target().to_string();
+            let host = host.trim_end_matches('.');
+            let port = record.port();
+            if !host.is_empty() && host != "." {
+                return Some(format!("https://{host}:{port}"));
             }
-            None
-        })
-        .await
-        .ok()
-        .flatten()
+        }
+        None
     }
 
     /// Send a signed GET request to a remote server.

@@ -151,14 +151,28 @@ struct SendJoinParams {
     event_id: String,
 }
 
+/// Query parameters for send_join (MSC3706 partial state support).
+#[derive(Deserialize, Default)]
+struct SendJoinQuery {
+    /// When true, the joining server requests partial state (MSC3706 "faster joins").
+    #[serde(default, rename = "org.matrix.msc3706.partial_state")]
+    partial_state: bool,
+}
+
 /// PUT /_matrix/federation/v2/send_join/{roomId}/{eventId}
 /// Accept a signed join event from a remote server.
 async fn send_join(
     State(state): State<FederationState>,
     Path(params): Path<SendJoinParams>,
+    axum::extract::Query(query): axum::extract::Query<SendJoinQuery>,
     Json(event_json): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    debug!(room_id = %params.room_id, event_id = %params.event_id, "send_join request");
+    debug!(
+        room_id = %params.room_id,
+        event_id = %params.event_id,
+        partial_state = query.partial_state,
+        "send_join request"
+    );
 
     let sender = event_json
         .get("sender")
@@ -240,37 +254,68 @@ async fn send_join(
             .await;
     }
 
-    // Return current room state + auth chain
+    // Fetch current room state and compute auth chain
     let current_state = state
         .storage()
         .get_current_state(&params.room_id)
         .await
         .unwrap_or_default();
 
-    let state_events: Vec<serde_json::Value> = current_state
-        .iter()
-        .map(|e| e.to_federation_json())
-        .collect();
+    let auth_chain = compute_auth_chain(state.storage(), &current_state).await;
 
-    // For alpha, auth_chain is the same as state (simplified)
-    let auth_chain = state_events.clone();
+    // MSC3706: when partial_state is requested, only return auth-related state
+    // events (create, power_levels, join_rules, the joining user's member event)
+    // instead of the full room state. The joining server will fetch the rest
+    // via /state_ids and /state in the background.
+    let state_events: Vec<serde_json::Value> = if query.partial_state {
+        current_state
+            .iter()
+            .filter(|e| {
+                e.event_type == et::CREATE
+                    || e.event_type == et::POWER_LEVELS
+                    || e.event_type == et::JOIN_RULES
+                    || e.event_type == et::HISTORY_VISIBILITY
+                    || (e.event_type == et::MEMBER && e.state_key.as_deref() == Some(&sender))
+            })
+            .map(|e| e.to_federation_json())
+            .collect()
+    } else {
+        current_state
+            .iter()
+            .map(|e| e.to_federation_json())
+            .collect()
+    };
 
-    Ok(Json(serde_json::json!({
+    let mut response = serde_json::json!({
         "origin": state.server_name().as_str(),
         "state": state_events,
         "auth_chain": auth_chain,
         "event": event_json,
-    })))
+    });
+
+    // MSC3706: include additional fields when partial state was requested
+    if query.partial_state {
+        // Confirm partial state was used
+        response["org.matrix.msc3706.partial_state"] = serde_json::json!(true);
+        // Signal that member events were omitted from state
+        response["members_omitted"] = serde_json::json!(true);
+        // Provide the list of servers currently in the room so the joining
+        // server knows who to contact for missing state and federation
+        let servers = servers_in_room(state.storage(), &params.room_id).await;
+        response["servers_in_room"] = serde_json::json!(servers);
+    }
+
+    Ok(Json(response))
 }
 
 /// PUT /_matrix/federation/v1/send_join — v1 returns [200, { ... }]
 async fn send_join_v1(
     State(state): State<FederationState>,
     Path(params): Path<SendJoinParams>,
+    query: axum::extract::Query<SendJoinQuery>,
     Json(event_json): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let result = send_join(State(state), Path(params), Json(event_json)).await?;
-    // v1 wraps the response in an array: [200, response]
+    let result = send_join(State(state), Path(params), query, Json(event_json)).await?;
     Ok(Json(serde_json::json!([200, result.0])))
 }
 
@@ -391,6 +436,74 @@ async fn send_leave_v1(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let result = send_leave(State(state), Path(params), Json(event_json)).await?;
     Ok(Json(serde_json::json!([200, result.0])))
+}
+
+/// Collect the set of server names with joined members in a room.
+///
+/// Used by MSC3706 partial state joins to tell the joining server which
+/// other servers are participating, so it can contact them for missing
+/// state and ongoing federation.
+async fn servers_in_room(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+) -> Vec<String> {
+    let mut servers = std::collections::HashSet::new();
+    if let Ok(members) = storage
+        .get_room_members(room_id, Membership::Join.as_str())
+        .await
+    {
+        for member in members {
+            let server = maelstrom_core::matrix::id::server_name_from_sigil_id(&member);
+            if !server.is_empty() {
+                servers.insert(server.to_string());
+            }
+        }
+    }
+    servers.into_iter().collect()
+}
+
+/// Compute the auth chain for a set of state events.
+///
+/// Returns the transitive closure of all events referenced by `auth_events` fields,
+/// starting from the given state events and walking the graph until no new events
+/// are found. This is the minimal set of events needed to verify the state per
+/// section 10B.20 of the federation spec.
+pub(crate) async fn compute_auth_chain(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    state_events: &[Pdu],
+) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut queue: Vec<String> = Vec::new();
+    let mut chain = Vec::new();
+
+    // Seed with auth_events from all state events
+    for event in state_events {
+        if let Some(auth_ids) = &event.auth_events {
+            for id in auth_ids {
+                if !seen.contains(id) {
+                    seen.insert(id.clone());
+                    queue.push(id.clone());
+                }
+            }
+        }
+    }
+
+    // BFS through auth_events graph
+    while let Some(event_id) = queue.pop() {
+        if let Ok(event) = storage.get_event(&event_id).await {
+            chain.push(event.to_federation_json());
+            if let Some(auth_ids) = &event.auth_events {
+                for id in auth_ids {
+                    if !seen.contains(id) {
+                        seen.insert(id.clone());
+                        queue.push(id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    chain
 }
 
 /// Get auth event IDs for a room (create, join_rules, power_levels events).

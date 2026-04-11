@@ -183,3 +183,43 @@ pub async fn servers_sharing_rooms(
 pub fn percent_encode(input: &str) -> String {
     urlencoding::encode(input).into_owned()
 }
+
+/// Select auth events for a new event per the Matrix spec.
+///
+/// Returns event IDs for the events that authorize this new event:
+/// - `m.room.create` (always, if it exists)
+/// - `m.room.power_levels` (if exists)
+/// - `m.room.join_rules` (only for membership events)
+/// - The sender's `m.room.member` event (if exists and event is not m.room.create)
+pub async fn select_auth_events(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+    sender: &str,
+    event_type: &str,
+) -> Vec<String> {
+    use maelstrom_core::matrix::room::event_type as et;
+
+    let mut auth = Vec::with_capacity(4);
+
+    if let Ok(e) = storage.get_state_event(room_id, et::CREATE, "").await {
+        auth.push(e.event_id);
+    }
+
+    if let Ok(e) = storage.get_state_event(room_id, et::POWER_LEVELS, "").await {
+        auth.push(e.event_id);
+    }
+
+    if event_type == et::MEMBER
+        && let Ok(e) = storage.get_state_event(room_id, et::JOIN_RULES, "").await
+    {
+        auth.push(e.event_id);
+    }
+
+    if event_type != et::CREATE
+        && let Ok(e) = storage.get_state_event(room_id, et::MEMBER, sender).await
+    {
+        auth.push(e.event_id);
+    }
+
+    auth
+}

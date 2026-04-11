@@ -28,6 +28,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 
 use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::event::timestamp_ms;
+use maelstrom_core::matrix::id::server_name_from_sigil_id;
 use maelstrom_core::matrix::room::Membership;
 
 use crate::extractors::AuthenticatedUser;
@@ -77,6 +79,43 @@ async fn send_receipt(
             room_id: room_id.clone(),
         })
         .await;
+
+    // Queue m.receipt EDU to remote servers that share this room
+    if let Some(tx_sender) = state.transaction_sender() {
+        let local_server = state.server_name().as_str();
+        let mut remote_servers = std::collections::HashSet::new();
+        if let Ok(members) = storage
+            .get_room_members(&room_id, Membership::Join.as_str())
+            .await
+        {
+            for member in members {
+                let server = server_name_from_sigil_id(&member);
+                if !server.is_empty() && server != local_server {
+                    remote_servers.insert(server.to_string());
+                }
+            }
+        }
+
+        let ts = timestamp_ms();
+        for server in remote_servers {
+            tx_sender.queue_edu(
+                &server,
+                serde_json::json!({
+                    "edu_type": "m.receipt",
+                    "content": {
+                        &room_id: {
+                            &receipt_type: {
+                                &sender: {
+                                    "event_ids": [&event_id],
+                                    "data": { "ts": ts }
+                                }
+                            }
+                        }
+                    }
+                }),
+            );
+        }
+    }
 
     Ok(Json(serde_json::json!({})))
 }

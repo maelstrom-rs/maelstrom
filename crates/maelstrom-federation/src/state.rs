@@ -34,6 +34,7 @@ use tracing::debug;
 use maelstrom_core::matrix::error::MatrixError;
 
 use crate::FederationState;
+use crate::joins::compute_auth_chain;
 
 /// Build the state query sub-router with state, state_ids, and event endpoints.
 pub fn routes() -> Router<FederationState> {
@@ -52,31 +53,53 @@ pub fn routes() -> Router<FederationState> {
 /// room's history (not yet implemented -- currently returns current state).
 #[derive(Deserialize)]
 struct StateQuery {
-    #[allow(dead_code)]
     event_id: Option<String>,
 }
 
-/// GET /_matrix/federation/v1/state/{roomId} — return current room state.
+/// GET /_matrix/federation/v1/state/{roomId} — return room state.
+///
+/// If the `event_id` query parameter is provided, returns the state at the point
+/// of that event (all state events with stream_position <= the target event's
+/// position). Otherwise returns the current state.
 async fn get_room_state(
     State(state): State<FederationState>,
     Path(room_id): Path<String>,
-    Query(_query): Query<StateQuery>,
+    Query(query): Query<StateQuery>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    debug!(room_id = %room_id, "Federation state request");
+    debug!(room_id = %room_id, event_id = ?query.event_id, "Federation state request");
 
-    let current_state = state
-        .storage()
-        .get_current_state(&room_id)
-        .await
-        .map_err(|_| MatrixError::not_found("Room not found"))?;
+    let state_events = if let Some(ref event_id) = query.event_id {
+        // Get state at the point of this event
+        let target = state
+            .storage()
+            .get_event(event_id)
+            .await
+            .map_err(|_| MatrixError::not_found("Event not found"))?;
+        let all_state = state
+            .storage()
+            .get_current_state(&room_id)
+            .await
+            .unwrap_or_default();
+        // Filter to events at or before the target position
+        all_state
+            .into_iter()
+            .filter(|e| e.stream_position <= target.stream_position)
+            .collect::<Vec<_>>()
+    } else {
+        state
+            .storage()
+            .get_current_state(&room_id)
+            .await
+            .map_err(|_| MatrixError::not_found("Room not found"))?
+    };
 
-    let pdus: Vec<serde_json::Value> = current_state
+    let pdus: Vec<serde_json::Value> = state_events
         .iter()
         .map(|e| e.to_federation_json())
         .collect();
 
-    // Simplified auth_chain = same as state for alpha
-    let auth_chain = pdus.clone();
+    // Compute the proper auth chain: transitive closure of auth_events
+    let auth_chain = compute_auth_chain(state.storage(), &state_events).await;
 
     Ok(Json(serde_json::json!({
         "pdus": pdus,
@@ -85,19 +108,49 @@ async fn get_room_state(
 }
 
 /// GET /_matrix/federation/v1/state_ids/{roomId} — return event IDs of room state.
+///
+/// If the `event_id` query parameter is provided, returns the state IDs at the
+/// point of that event. Otherwise returns the current state IDs.
 async fn get_room_state_ids(
     State(state): State<FederationState>,
     Path(room_id): Path<String>,
-    Query(_query): Query<StateQuery>,
+    Query(query): Query<StateQuery>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
-    let current_state = state
-        .storage()
-        .get_current_state(&room_id)
-        .await
-        .map_err(|_| MatrixError::not_found("Room not found"))?;
+    let state_events = if let Some(ref event_id) = query.event_id {
+        let target = state
+            .storage()
+            .get_event(event_id)
+            .await
+            .map_err(|_| MatrixError::not_found("Event not found"))?;
+        let all_state = state
+            .storage()
+            .get_current_state(&room_id)
+            .await
+            .unwrap_or_default();
+        all_state
+            .into_iter()
+            .filter(|e| e.stream_position <= target.stream_position)
+            .collect::<Vec<_>>()
+    } else {
+        state
+            .storage()
+            .get_current_state(&room_id)
+            .await
+            .map_err(|_| MatrixError::not_found("Room not found"))?
+    };
 
-    let pdu_ids: Vec<String> = current_state.iter().map(|e| e.event_id.clone()).collect();
-    let auth_chain_ids = pdu_ids.clone();
+    let pdu_ids: Vec<String> = state_events.iter().map(|e| e.event_id.clone()).collect();
+
+    // Compute proper auth chain and extract just the event IDs
+    let auth_chain = compute_auth_chain(state.storage(), &state_events).await;
+    let auth_chain_ids: Vec<String> = auth_chain
+        .iter()
+        .filter_map(|e| {
+            e.get("event_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "pdu_ids": pdu_ids,

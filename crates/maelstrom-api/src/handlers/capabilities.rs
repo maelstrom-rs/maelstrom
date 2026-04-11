@@ -40,6 +40,11 @@
 //! | `GET/PUT/DELETE` | `/_matrix/client/v3/devices/{deviceId}` | Get, rename, or delete a device |
 //! | `GET`    | `/_matrix/client/v3/rooms/{roomId}/members` | Get the member list for a room |
 //! | `POST`   | `/_matrix/client/v3/rooms/{roomId}/read_markers` | Set read markers (fully-read and read-receipt) |
+//! | `GET`    | `/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags` | List room tags |
+//! | `PUT`    | `/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags/{tag}` | Set a room tag |
+//! | `DELETE` | `/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags/{tag}` | Remove a room tag |
+//! | `POST`   | `/_matrix/client/v3/user/{userId}/openid/request_token` | Request an OpenID token |
+//! | `POST`   | `/_matrix/client/v3/refresh` | Refresh an access token (unsupported) |
 //!
 //! # Matrix spec
 //!
@@ -52,14 +57,16 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use http::StatusCode;
 use serde::Deserialize;
 
-use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::error::{ErrorCode, MatrixError};
 use maelstrom_core::matrix::id::DeviceId;
 use maelstrom_core::matrix::room::event_type as et;
 use maelstrom_storage::traits::StorageError;
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
+use crate::handlers::util;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -121,6 +128,22 @@ pub fn routes() -> Router<AppState> {
             "/_matrix/client/v3/rooms/{roomId}/read_markers",
             post(post_read_markers),
         )
+        // Room tags (spec §14.5)
+        .route(
+            "/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags",
+            get(get_tags),
+        )
+        .route(
+            "/_matrix/client/v3/user/{userId}/rooms/{roomId}/tags/{tag}",
+            axum::routing::put(put_tag).delete(delete_tag),
+        )
+        // OpenID token (spec §12.1)
+        .route(
+            "/_matrix/client/v3/user/{userId}/openid/request_token",
+            post(request_openid_token),
+        )
+        // Token refresh (spec §5.5.4) -- unsupported, returns clear error
+        .route("/_matrix/client/v3/refresh", post(refresh_token))
 }
 
 // -- Capabilities --
@@ -1213,6 +1236,24 @@ async fn get_room_members(
     let storage = state.storage();
     let sender = auth.user_id.to_string();
 
+    // MSC3706: Reject /members while a partial state join is still resolving.
+    // The member list is incomplete until the background resync finishes.
+    if let Ok(data) = storage
+        .get_account_data(
+            &format!("_room:{room_id}"),
+            None,
+            "_maelstrom.partial_state",
+        )
+        .await
+        && data.get("partial").and_then(|v| v.as_bool()) == Some(true)
+    {
+        return Err(MatrixError::new(
+            http::StatusCode::BAD_REQUEST,
+            maelstrom_core::matrix::error::ErrorCode::PartialState,
+            "Room member list is not yet available (partial state join in progress)",
+        ));
+    }
+
     let current_state = storage
         .get_current_state(&room_id)
         .await
@@ -1325,4 +1366,195 @@ async fn post_read_markers(
         .await;
 
     Ok(Json(serde_json::json!({})))
+}
+
+// -- Room Tags (spec §14.5) --
+//
+// Tags are per-user, per-room metadata stored as account data of type `m.tag`.
+// The three endpoints below are thin wrappers around the per-room account data
+// storage, reading and writing a JSON object of the form:
+// `{"tags": {"m.favourite": {"order": 0.5}, "u.custom": {}}}`
+
+/// GET /_matrix/client/v3/user/{userId}/rooms/{roomId}/tags
+///
+/// List all tags set by the user on this room.
+async fn get_tags(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((_user_id, room_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    let sender = auth.user_id.to_string();
+
+    let data = state
+        .storage()
+        .get_account_data(&sender, Some(&room_id), "m.tag")
+        .await;
+
+    match data {
+        Ok(content) => {
+            let tags = content
+                .get("tags")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            Ok(Json(serde_json::json!({ "tags": tags })))
+        }
+        Err(_) => Ok(Json(serde_json::json!({ "tags": {} }))),
+    }
+}
+
+/// PUT /_matrix/client/v3/user/{userId}/rooms/{roomId}/tags/{tag}
+///
+/// Add or update a tag on a room. The request body contains tag metadata
+/// (e.g. `{"order": 0.5}`).
+async fn put_tag(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((_user_id, room_id, tag)): Path<(String, String, String)>,
+    MatrixJson(body): MatrixJson<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    let sender = auth.user_id.to_string();
+
+    // Read existing tags or start with an empty object
+    let mut content = state
+        .storage()
+        .get_account_data(&sender, Some(&room_id), "m.tag")
+        .await
+        .unwrap_or(serde_json::json!({"tags": {}}));
+
+    // Ensure the "tags" key exists as an object
+    if !content.get("tags").is_some_and(|v| v.is_object()) {
+        content
+            .as_object_mut()
+            .unwrap()
+            .insert("tags".to_string(), serde_json::json!({}));
+    }
+
+    // Add or update the tag
+    content["tags"][&tag] = body;
+
+    state
+        .storage()
+        .set_account_data(&sender, Some(&room_id), "m.tag", &content)
+        .await
+        .map_err(crate::extractors::storage_error)?;
+
+    // Notify sync so the tag change appears in the next sync response
+    state
+        .notifier()
+        .notify(crate::notify::Notification::RoomEvent {
+            room_id: room_id.clone(),
+        })
+        .await;
+
+    Ok(Json(serde_json::json!({})))
+}
+
+/// DELETE /_matrix/client/v3/user/{userId}/rooms/{roomId}/tags/{tag}
+///
+/// Remove a tag from a room.
+async fn delete_tag(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((_user_id, room_id, tag)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    let sender = auth.user_id.to_string();
+
+    // Read existing tags
+    let mut content = state
+        .storage()
+        .get_account_data(&sender, Some(&room_id), "m.tag")
+        .await
+        .unwrap_or(serde_json::json!({"tags": {}}));
+
+    // Remove the tag if it exists
+    if let Some(tags) = content.get_mut("tags").and_then(|v| v.as_object_mut()) {
+        tags.remove(&tag);
+    }
+
+    state
+        .storage()
+        .set_account_data(&sender, Some(&room_id), "m.tag", &content)
+        .await
+        .map_err(crate::extractors::storage_error)?;
+
+    // Notify sync
+    state
+        .notifier()
+        .notify(crate::notify::Notification::RoomEvent {
+            room_id: room_id.clone(),
+        })
+        .await;
+
+    Ok(Json(serde_json::json!({})))
+}
+
+// -- OpenID Token (spec §12.1) --
+//
+// Returns a short-lived access token that third-party services (integration
+// managers) can exchange via the federation `/_matrix/federation/v1/openid/userinfo`
+// endpoint to verify the user's identity. The token is stored as special
+// account data keyed by `_maelstrom.openid.<token>`.
+
+/// POST /_matrix/client/v3/user/{userId}/openid/request_token
+///
+/// Generate an OpenID token for the authenticated user.
+async fn request_openid_token(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    let sender = auth.user_id.to_string();
+
+    // The spec says the authenticated user must match the userId in the path
+    if sender != user_id {
+        return Err(MatrixError::forbidden(
+            "Cannot request OpenID token for another user",
+        ));
+    }
+
+    let token = util::generate_access_token();
+    let expires_in: u64 = 3600;
+
+    // Store the token mapping so the federation userinfo endpoint can look it up
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    state
+        .storage()
+        .set_account_data(
+            &sender,
+            None,
+            &format!("_maelstrom.openid.{token}"),
+            &serde_json::json!({
+                "user_id": sender,
+                "expires_at": now_ms + expires_in * 1000,
+            }),
+        )
+        .await
+        .map_err(crate::extractors::storage_error)?;
+
+    Ok(Json(serde_json::json!({
+        "access_token": token,
+        "token_type": "Bearer",
+        "matrix_server_name": state.server_name().as_str(),
+        "expires_in": expires_in,
+    })))
+}
+
+// -- Token Refresh (spec §5.5.4) --
+//
+// Maelstrom does not issue refresh tokens, so this endpoint returns a clear
+// error per the spec (servers MAY support refresh tokens -- it is optional).
+
+/// POST /_matrix/client/v3/refresh
+///
+/// Refresh an access token. Not supported -- returns M_UNKNOWN.
+async fn refresh_token() -> Result<Json<serde_json::Value>, MatrixError> {
+    Err(MatrixError::new(
+        StatusCode::BAD_REQUEST,
+        ErrorCode::Unknown,
+        "Token refresh is not supported. Please re-authenticate.",
+    ))
 }

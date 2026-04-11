@@ -33,8 +33,10 @@
 //! | [`media`]       | [`MediaStore`](crate::traits::MediaStore)  |
 //! | [`federation`]  | [`FederationKeyStore`](crate::traits::FederationKeyStore) |
 //! | [`relations`]   | [`RelationStore`](crate::traits::RelationStore) |
+//! | [`appservice`]  | [`ApplicationServiceStore`](crate::traits::ApplicationServiceStore) |
 
 mod account_data;
+mod appservice;
 pub mod connection;
 mod devices;
 mod events;

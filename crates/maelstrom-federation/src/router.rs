@@ -22,7 +22,7 @@
 //! | [`state`]       | `GET /state/{roomId}`, `GET /state_ids/{roomId}`, `GET /event/{eventId}` |
 //! | [`backfill`]    | `GET /backfill/{roomId}`, `POST /get_missing_events/{roomId}` |
 //! | [`user_keys`]   | `POST /user/keys/query`                                 |
-//! | [`queries`]     | `GET /query/profile`, `GET /query/directory`            |
+//! | [`queries`]     | `GET /query/profile`, `GET /query/directory`, `GET /publicRooms`, `POST /publicRooms` |
 //! | [`invite`]      | `PUT /invite/{roomId}/{eventId}` (v1 and v2)            |
 //!
 //! [`key_server`]: crate::key_server

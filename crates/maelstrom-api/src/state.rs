@@ -170,6 +170,14 @@ impl AppState {
         self.inner.federation.as_deref()
     }
 
+    /// Get the `Arc<FederationClient>` for use in spawned background tasks.
+    ///
+    /// Returns `None` when federation is disabled. Use this when you need to
+    /// clone the client for use across `tokio::spawn` boundaries.
+    pub fn federation_arc(&self) -> Option<Arc<FederationClient>> {
+        self.inner.federation.clone()
+    }
+
     /// Access the outbound federation transaction sender, if configured.
     ///
     /// Returns `None` when federation is disabled. Used to queue EDUs
