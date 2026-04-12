@@ -359,13 +359,14 @@ async fn put_account_data(
 
     // MSC3391: PUT with empty object deletes the account data
     if content.as_object().is_some_and(|o| o.is_empty()) {
+        let pos = state.storage().current_stream_position().await.unwrap_or(0);
         state
             .storage()
             .set_account_data(
                 &sender,
                 None,
                 &data_type,
-                &serde_json::json!({"_msc3391_deleted": true}),
+                &serde_json::json!({"_msc3391_deleted": true, "_pos": pos + 1}),
             )
             .await
             .map_err(crate::extractors::storage_error)?;
@@ -419,13 +420,14 @@ async fn put_room_account_data(
 
     // MSC3391: PUT with empty object deletes the account data
     if content.as_object().is_some_and(|o| o.is_empty()) {
+        let pos = state.storage().current_stream_position().await.unwrap_or(0);
         state
             .storage()
             .set_account_data(
                 &sender,
                 Some(&room_id),
                 &data_type,
-                &serde_json::json!({"_msc3391_deleted": true}),
+                &serde_json::json!({"_msc3391_deleted": true, "_pos": pos + 1}),
             )
             .await
             .map_err(crate::extractors::storage_error)?;
@@ -458,13 +460,16 @@ async fn delete_account_data(
     // MSC3391: set content to a sentinel so the sync handler can return an
     // empty-content entry, telling clients the key was cleared. GET will
     // treat this sentinel as "not found" and return 404.
+    // Include the current stream position so sync can decide whether this
+    // deletion is "new" relative to the client's `since` token.
+    let pos = state.storage().current_stream_position().await.unwrap_or(0);
     state
         .storage()
         .set_account_data(
             &sender,
             None,
             &data_type,
-            &serde_json::json!({"_msc3391_deleted": true}),
+            &serde_json::json!({"_msc3391_deleted": true, "_pos": pos + 1}),
         )
         .await
         .map_err(crate::extractors::storage_error)?;
@@ -486,13 +491,14 @@ async fn delete_room_account_data(
 
     // MSC3391: set content to a sentinel so the sync handler can return an
     // empty-content entry, telling clients the key was cleared.
+    let pos = state.storage().current_stream_position().await.unwrap_or(0);
     state
         .storage()
         .set_account_data(
             &sender,
             Some(&room_id),
             &data_type,
-            &serde_json::json!({"_msc3391_deleted": true}),
+            &serde_json::json!({"_msc3391_deleted": true, "_pos": pos + 1}),
         )
         .await
         .map_err(crate::extractors::storage_error)?;
@@ -1164,12 +1170,16 @@ async fn delete_device(
         .await
         .map_err(crate::extractors::storage_error)?;
 
-    // Clean up device-specific local notification settings (MSC3890)
+    // Clean up device-specific local notification settings (MSC3890).
+    // Must truly delete the record so GET returns 404 (not a sentinel).
     let notif_key = format!("org.matrix.msc3890.local_notification_settings.{did}");
-    let _ = state
+    if let Err(e) = state
         .storage()
         .delete_account_data(auth.user_id.as_ref(), None, &notif_key)
-        .await;
+        .await
+    {
+        tracing::warn!(user = %auth.user_id, key = %notif_key, error = %e, "Failed to delete device notification settings");
+    }
 
     // Notify sync so account data deletion is reflected
     state
@@ -1236,23 +1246,10 @@ async fn get_room_members(
     let storage = state.storage();
     let sender = auth.user_id.to_string();
 
-    // MSC3706: Reject /members while a partial state join is still resolving.
-    // The member list is incomplete until the background resync finishes.
-    if let Ok(data) = storage
-        .get_account_data(
-            &format!("_room:{room_id}"),
-            None,
-            "_maelstrom.partial_state",
-        )
-        .await
-        && data.get("partial").and_then(|v| v.as_bool()) == Some(true)
-    {
-        return Err(MatrixError::new(
-            http::StatusCode::BAD_REQUEST,
-            maelstrom_core::matrix::error::ErrorCode::PartialState,
-            "Room member list is not yet available (partial state join in progress)",
-        ));
-    }
+    // MSC3706: If a partial state join is still resolving, we serve whatever
+    // members we already have rather than hard-blocking with a 400.  The
+    // background resync will fill in the rest, but tests (and clients) expect
+    // /members to be usable immediately after join.
 
     let current_state = storage
         .get_current_state(&room_id)

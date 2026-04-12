@@ -76,13 +76,32 @@ pub async fn require_membership(
     user_id: &str,
     room_id: &str,
 ) -> Result<String, MatrixError> {
-    storage
-        .get_membership(user_id, room_id)
-        .await
-        .map_err(|e| match e {
-            StorageError::NotFound => MatrixError::forbidden("You are not in this room"),
-            other => crate::extractors::storage_error(other),
-        })
+    match storage.get_membership(user_id, room_id).await {
+        Ok(m) => Ok(m),
+        Err(StorageError::NotFound) => {
+            // Fallback: check the m.room.member state event directly.
+            // This covers cases where the membership graph edge was removed
+            // (e.g., after forget) but the state event still records the
+            // user's last membership. Needed for departed users to access
+            // message history per CS API § 8.6.
+            if let Ok(member_event) = storage
+                .get_state_event(
+                    room_id,
+                    maelstrom_core::matrix::room::event_type::MEMBER,
+                    user_id,
+                )
+                .await
+                && let Some(m) = member_event
+                    .content
+                    .get("membership")
+                    .and_then(|v| v.as_str())
+            {
+                return Ok(m.to_string());
+            }
+            Err(MatrixError::forbidden("You are not in this room"))
+        }
+        Err(other) => Err(crate::extractors::storage_error(other)),
+    }
 }
 
 /// Hash a password using Argon2id with a random salt.

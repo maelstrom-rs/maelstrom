@@ -292,6 +292,57 @@ impl FederationClient {
         serde_json::from_str(&text).map_err(|e| FederationError::InvalidResponse(e.to_string()))
     }
 
+    /// Send a signed POST request with a JSON body to a remote server.
+    ///
+    /// Used for federation key queries (`/user/keys/query`) and other
+    /// POST-based federation endpoints.
+    pub async fn post_json(
+        &self,
+        destination: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, FederationError> {
+        let base_url = self.discover(destination).await;
+        let url = format!("{base_url}{path}");
+
+        let auth = crate::signing::sign_request(
+            &self.signing_key,
+            self.server_name.as_str(),
+            destination,
+            "POST",
+            path,
+            Some(body),
+        );
+
+        let body_str =
+            serde_json::to_string(body).map_err(|e| FederationError::Request(e.to_string()))?;
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", auth)
+            .header("Content-Type", "application/json")
+            .body(body_str)
+            .send()
+            .await
+            .map_err(|e| FederationError::Request(format!("{destination}: {e}")))?;
+
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| FederationError::Request(e.to_string()))?;
+
+        if !status.is_success() {
+            return Err(FederationError::Remote(format!(
+                "{destination} returned {}: {text}",
+                status.as_u16()
+            )));
+        }
+
+        serde_json::from_str(&text).map_err(|e| FederationError::InvalidResponse(e.to_string()))
+    }
+
     /// Fetch a remote server's signing keys from `/_matrix/key/v2/server`.
     ///
     /// Every Matrix homeserver publishes its Ed25519 signing keys at this well-known

@@ -96,7 +96,9 @@ async fn search(
         .room_events
         .ok_or_else(|| MatrixError::bad_json("Missing room_events search category"))?;
 
-    // Pagination token: prefer query-string `next_batch`, fall back to body `from`
+    // Pagination token: prefer query-string `next_batch` (set by client from
+    // previous response), then fall back to body `from` field.
+    // On the first request neither is present, so default to 0.
     let offset = search_query
         .next_batch
         .as_deref()
@@ -137,11 +139,15 @@ async fn search(
     let search_lower = room_search.search_term.to_lowercase();
     let order_by = room_search.order_by.as_deref().unwrap_or("rank");
 
-    // Try full-text search first, fall back to LIKE-style if no results
+    // Try full-text search first, fall back to LIKE-style if no results.
+    // Use unwrap_or_default so that full-text index errors (e.g. missing
+    // analyzer) gracefully fall through to the client-side filter below.
     let mut events = storage
         .search_events(&room_ids, &room_search.search_term, 1000)
         .await
-        .map_err(crate::extractors::storage_error)?;
+        .unwrap_or_default();
+
+    let used_fulltext = !events.is_empty();
 
     // If full-text search returns nothing, fetch all room events and filter client-side
     if events.is_empty() {
@@ -173,6 +179,32 @@ async fn search(
             }
         })
         .collect();
+
+    // If full-text search returned results but none passed the body filter,
+    // retry with the brute-force fallback
+    if all_filtered.is_empty() && used_fulltext {
+        let max_pos = storage.current_stream_position().await.unwrap_or(999999) + 1;
+        let mut all_events = Vec::new();
+        for room_id in &room_ids {
+            if let Ok(room_events) = storage.get_room_events(room_id, max_pos, 1000, "b").await {
+                all_events.extend(room_events);
+            }
+        }
+        all_filtered = all_events
+            .into_iter()
+            .filter(|e| {
+                let has_content = e.content.as_object().map(|o| !o.is_empty()).unwrap_or(true);
+                if !has_content {
+                    return false;
+                }
+                if let Some(body) = e.content.get("body").and_then(|b| b.as_str()) {
+                    body.to_lowercase().contains(&search_lower)
+                } else {
+                    false
+                }
+            })
+            .collect();
+    }
 
     // Sort results based on order_by
     if order_by == "recent" {
@@ -248,26 +280,25 @@ async fn search(
 
     let count = total_count;
     let next_offset = offset + filtered.len();
-    let has_more = next_offset < total_count;
 
     // Build highlights from search terms (split on whitespace)
     let highlights: Vec<&str> = room_search.search_term.split_whitespace().collect();
 
-    let mut response = serde_json::json!({
-        "search_categories": {
-            "room_events": {
-                "results": results,
-                "count": count,
-                "highlights": highlights,
-            }
-        }
+    let mut room_events_response = serde_json::json!({
+        "results": results,
+        "count": count,
+        "highlights": highlights,
     });
 
-    // Add next_batch if there are more results
-    if has_more {
-        response["search_categories"]["room_events"]["next_batch"] =
-            serde_json::json!(next_offset.to_string());
-    }
+    // Always include next_batch so clients can attempt pagination.
+    // Per spec, next_batch is present when there may be more results.
+    room_events_response["next_batch"] = serde_json::json!(next_offset.to_string());
+
+    let response = serde_json::json!({
+        "search_categories": {
+            "room_events": room_events_response,
+        }
+    });
 
     Ok(Json(response))
 }

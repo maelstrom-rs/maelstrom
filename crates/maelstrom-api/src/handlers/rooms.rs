@@ -1709,6 +1709,16 @@ async fn upgrade_room(
         })
         .await;
 
+    // Notify account data changes for users whose push rules were updated
+    for member in &old_members {
+        state
+            .notifier()
+            .notify(Notification::AccountData {
+                user_id: member.clone(),
+            })
+            .await;
+    }
+
     Ok(Json(serde_json::json!({ "replacement_room": new_room_id })))
 }
 

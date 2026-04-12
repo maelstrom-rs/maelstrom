@@ -400,26 +400,56 @@ async fn sync(
     let mut join_map =
         add_ephemeral_events(storage, state.ephemeral(), join_map, &joined_rooms, false).await?;
 
-    // Add per-room account_data to rooms in the join map
+    // Add per-room account_data — check ALL joined rooms, not just those
+    // already in join_map, so that account-data-only changes are included.
     if !is_initial {
-        for (room_id, room_response) in join_map.iter_mut() {
+        for room_id in &joined_rooms {
             let room_ad = storage
                 .get_all_room_account_data(&user_id, room_id)
                 .await
                 .unwrap_or_default();
             if !room_ad.is_empty() {
-                // MSC3391: filter out deleted room account data entries entirely
+                // MSC3391: handle deleted room account data with _pos tracking
                 let events: Vec<_> = room_ad
                     .into_iter()
-                    .filter(|(_, content)| {
-                        content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+                    .filter_map(|(dtype, content)| {
+                        let is_deleted =
+                            content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true);
+                        if is_deleted {
+                            let del_pos = content.get("_pos").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if del_pos > since {
+                                Some(serde_json::json!({ "type": dtype, "content": {} }))
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(serde_json::json!({ "type": dtype, "content": content }))
+                        }
                     })
-                    .map(
-                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
-                    )
                     .collect();
                 if !events.is_empty() {
-                    room_response.account_data = Some(AccountDataResponse { events });
+                    if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
+                        room_response.account_data = Some(AccountDataResponse { events });
+                    } else {
+                        join_map.insert(
+                            room_id.clone(),
+                            JoinedRoomResponse {
+                                state: StateResponse { events: vec![] },
+                                timeline: TimelineResponse {
+                                    events: vec![],
+                                    prev_batch: since.to_string(),
+                                    limited: false,
+                                },
+                                ephemeral: EphemeralResponse { events: vec![] },
+                                unread_notifications: UnreadNotifications {
+                                    highlight_count: 0,
+                                    notification_count: 0,
+                                },
+                                account_data: Some(AccountDataResponse { events }),
+                                summary: None,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -457,15 +487,23 @@ async fn sync(
                 .await
                 .unwrap_or_default();
             if !room_ad.is_empty() {
-                // MSC3391: filter out deleted room account data
+                // MSC3391: handle deleted room account data
                 let events: Vec<_> = room_ad
                     .into_iter()
-                    .filter(|(_, content)| {
-                        content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+                    .filter_map(|(dtype, content)| {
+                        let is_deleted =
+                            content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true);
+                        if is_deleted {
+                            let del_pos = content.get("_pos").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if del_pos > since {
+                                Some(serde_json::json!({ "type": dtype, "content": {} }))
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(serde_json::json!({ "type": dtype, "content": content }))
+                        }
                     })
-                    .map(
-                        |(dtype, content)| serde_json::json!({ "type": dtype, "content": content }),
-                    )
                     .collect();
                 let ad_response = AccountDataResponse { events };
                 if let Some(room_response) = join_map.get_mut(room_id.as_str()) {
@@ -540,12 +578,38 @@ async fn sync(
                     continue;
                 }
 
-                // For incremental sync, include the leave membership event
+                // For incremental sync, include timeline events between
+                // `since` and the leave position, plus the leave event itself.
+                let effective_limit = timeline_limit.unwrap_or(10);
                 let mut timeline_events = Vec::new();
+                if let Ok(events) = storage
+                    .get_room_events(room_id, since, effective_limit + 10, "f")
+                    .await
+                {
+                    for event in events {
+                        if event.stream_position <= leave_pos {
+                            timeline_events.push(event.to_client_event().into_json());
+                            if timeline_events.len() >= effective_limit {
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Ensure the leave event itself is included
                 if let Ok(member_event) =
                     storage.get_state_event(room_id, et::MEMBER, &user_id).await
                 {
-                    timeline_events.push(member_event.to_client_event().into_json());
+                    let leave_json = member_event.to_client_event().into_json();
+                    let leave_eid = leave_json
+                        .get("event_id")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("");
+                    let already = timeline_events
+                        .iter()
+                        .any(|e| e.get("event_id").and_then(|eid| eid.as_str()) == Some(leave_eid));
+                    if !already {
+                        timeline_events.push(leave_json);
+                    }
                 }
 
                 leave_map.insert(room_id.clone(), serde_json::json!({
@@ -559,7 +623,7 @@ async fn sync(
         let device_lists = compute_device_lists(storage, &joined_rooms, &user_id, since).await;
 
         // Build global account_data for response
-        let global_account_data = build_global_account_data(storage, &user_id, false).await;
+        let global_account_data = build_global_account_data(storage, &user_id, false, since).await;
 
         // Build presence events
         let presence =
@@ -706,17 +770,50 @@ async fn sync(
                         }
                     }
                 } else {
-                    // For incremental sync, include the leave membership event
+                    // For incremental sync, include timeline events between
+                    // `since` and the leave position, plus the leave event itself.
+                    if let Ok(events) = storage
+                        .get_room_events(room_id, since, effective_timeline_limit + 10, "f")
+                        .await
+                    {
+                        for event in events {
+                            if event.stream_position <= leave_pos {
+                                if let Some(ref types) = timeline_types
+                                    && !types.contains(&event.event_type)
+                                {
+                                    continue;
+                                }
+                                timeline_events.push(event.to_client_event().into_json());
+                                if timeline_events.len() >= effective_timeline_limit {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Ensure the leave event itself is included
                     if let Ok(member_event) =
                         storage.get_state_event(room_id, et::MEMBER, &user_id).await
                     {
-                        timeline_events.push(member_event.to_client_event().into_json());
+                        let leave_json = member_event.to_client_event().into_json();
+                        let leave_eid = leave_json
+                            .get("event_id")
+                            .and_then(|e| e.as_str())
+                            .unwrap_or("");
+                        let already = timeline_events.iter().any(|e| {
+                            e.get("event_id").and_then(|eid| eid.as_str()) == Some(leave_eid)
+                        });
+                        if !already {
+                            timeline_events.push(leave_json);
+                        }
                     }
                 }
             }
 
-            // Reverse to chronological order (oldest first)
-            timeline_events.reverse();
+            // For initial sync, reverse to chronological order (backward query returns newest first).
+            // For incremental sync, events are already in chronological order (forward query).
+            if is_initial {
+                timeline_events.reverse();
+            }
 
             // If timeline_limit is 0, put relevant events in state section instead
             if effective_timeline_limit == 0 {
@@ -766,7 +863,7 @@ async fn sync(
     };
 
     // Build global account_data for response
-    let global_account_data = build_global_account_data(storage, &user_id, is_initial).await;
+    let global_account_data = build_global_account_data(storage, &user_id, is_initial, since).await;
 
     // Build presence events
     let presence = build_presence_events(storage, state.ephemeral(), &joined_rooms, &user_id).await;
@@ -851,18 +948,18 @@ async fn build_initial_sync(
         let room_ad = if room_account_data.is_empty() {
             None
         } else {
-            Some(AccountDataResponse {
-                events: room_account_data
-                    .into_iter()
-                    .map(|(dtype, content)| {
-                        if content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true) {
-                            serde_json::json!({ "type": dtype, "content": {} })
-                        } else {
-                            serde_json::json!({ "type": dtype, "content": content })
-                        }
-                    })
-                    .collect(),
-            })
+            let events: Vec<_> = room_account_data
+                .into_iter()
+                .filter(|(_, content)| {
+                    content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+                })
+                .map(|(dtype, content)| serde_json::json!({ "type": dtype, "content": content }))
+                .collect();
+            if events.is_empty() {
+                None
+            } else {
+                Some(AccountDataResponse { events })
+            }
         };
 
         // Room summary: member counts
@@ -952,12 +1049,14 @@ async fn build_incremental_sync(
         }
     }
 
-    // Separate state events from timeline events per room
+    // Separate state events from timeline events per room.
+    // Timeline entries carry their stream_position so we can compute prev_batch.
     let mut room_state: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-    let mut room_timeline: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut room_timeline: HashMap<String, Vec<(i64, serde_json::Value)>> = HashMap::new();
     for event in new_events {
         if joined_set.contains(event.room_id.as_str()) {
             let is_newly_joined = newly_joined.contains(&event.room_id);
+            let pos = event.stream_position;
             let client_event = event.to_client_event().into_json();
 
             if event.is_state() {
@@ -972,14 +1071,14 @@ async fn build_incremental_sync(
                     room_timeline
                         .entry(event.room_id.clone())
                         .or_default()
-                        .push(client_event);
+                        .push((pos, client_event));
                 }
             } else {
                 // Non-state events always go in timeline
                 room_timeline
                     .entry(event.room_id.clone())
                     .or_default()
-                    .push(client_event);
+                    .push((pos, client_event));
             }
         }
     }
@@ -999,15 +1098,33 @@ async fn build_incremental_sync(
             room_state.remove(room_id).unwrap_or_default()
         };
 
-        let mut timeline_events = room_timeline.remove(room_id).unwrap_or_default();
+        let mut timeline_with_pos = room_timeline.remove(room_id).unwrap_or_default();
 
         // Apply timeline limit and set limited/prev_batch for gaps
         let effective_limit = timeline_limit.unwrap_or(20);
-        let limited = is_newly_joined || timeline_events.len() > effective_limit;
-        if timeline_events.len() > effective_limit {
+        let limited = is_newly_joined || timeline_with_pos.len() > effective_limit;
+        if timeline_with_pos.len() > effective_limit {
             // Keep only the most recent events (last N)
-            timeline_events = timeline_events.split_off(timeline_events.len() - effective_limit);
+            timeline_with_pos =
+                timeline_with_pos.split_off(timeline_with_pos.len() - effective_limit);
         }
+
+        // Compute prev_batch from the first event's stream_position (before
+        // we strip positions out).  When the timeline is limited, prev_batch
+        // points to just before the first returned event so the client can
+        // paginate backward.
+        let prev_batch = if limited {
+            timeline_with_pos
+                .first()
+                .map(|(pos, _)| (*pos - 1).to_string())
+                .unwrap_or_else(|| since.to_string())
+        } else {
+            since.to_string()
+        };
+
+        // Strip stream positions — from here on we only need the JSON values.
+        let timeline_events: Vec<serde_json::Value> =
+            timeline_with_pos.into_iter().map(|(_, ev)| ev).collect();
 
         if state_events.is_empty() && timeline_events.is_empty() {
             continue;
@@ -1038,21 +1155,6 @@ async fn build_incremental_sync(
             })
         } else {
             None
-        };
-
-        // prev_batch: when limited, use the stream_position of the first timeline event
-        let prev_batch = if limited {
-            timeline_events
-                .first()
-                .and_then(|e| e.get("origin_server_ts")) // Use first event as anchor
-                .map(|_| {
-                    // Get the stream_position from the first timeline event
-                    // We need to use the event's position, stored before to_client_event conversion
-                    since.to_string() // Fallback: use since token
-                })
-                .unwrap_or_else(|| since.to_string())
-        } else {
-            since.to_string()
         };
 
         // Add unsigned.membership per spec — for joined rooms it's always "join"
@@ -1484,6 +1586,7 @@ async fn build_presence_events(
                     let mut content = serde_json::json!({
                         "presence": presence.status,
                         "last_active_ago": last_active_ago,
+                        "currently_active": presence.status == "online",
                     });
                     if let Some(msg) = &presence.status_msg {
                         content["status_msg"] = serde_json::Value::String(msg.clone());
@@ -1510,6 +1613,7 @@ async fn build_presence_events(
         let mut content = serde_json::json!({
             "presence": presence.status,
             "last_active_ago": last_active_ago,
+            "currently_active": presence.status == "online",
         });
         if let Some(msg) = &presence.status_msg {
             content["status_msg"] = serde_json::Value::String(msg.clone());
@@ -1537,6 +1641,7 @@ async fn build_global_account_data(
     storage: &dyn maelstrom_storage::traits::Storage,
     user_id: &str,
     is_initial: bool,
+    since: i64,
 ) -> Option<AccountDataResponse> {
     let mut events = Vec::new();
 
@@ -1640,18 +1745,22 @@ async fn build_global_account_data(
         for (data_type, content) in all_data {
             let is_deleted =
                 content.get("_msc3391_deleted").and_then(|v| v.as_bool()) == Some(true);
-            if is_deleted && is_initial {
-                // On initial sync, skip deleted entries — the client has never
-                // seen them so there is nothing to clear.
-                continue;
-            }
-            // MSC3391: deleted account data is stored with a sentinel;
-            // expose it to clients as empty content so they clear the key.
             if is_deleted {
-                events.push(serde_json::json!({
-                    "type": data_type,
-                    "content": {},
-                }));
+                // MSC3391: on initial sync, skip deleted entries entirely
+                // (client never knew about them). On incremental sync, include
+                // with empty content ONLY if the deletion happened after `since`
+                // so the client clears its local copy exactly once.
+                if is_initial {
+                    continue;
+                }
+                let del_pos = content.get("_pos").and_then(|v| v.as_i64()).unwrap_or(0);
+                if del_pos > since {
+                    events.push(serde_json::json!({
+                        "type": data_type,
+                        "content": {},
+                    }));
+                }
+                // else: old deletion, skip
             } else {
                 events.push(serde_json::json!({
                     "type": data_type,

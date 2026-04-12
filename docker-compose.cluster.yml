@@ -1,0 +1,349 @@
+# Fully clustered Maelstrom environment for integration and Complement testing.
+#
+# Architecture:
+#   - 1x TiKV Placement Driver (pd)
+#   - 3x TiKV storage nodes (distributed KV backend for SurrealDB)
+#   - 3x SurrealDB instances (each connected to the shared TiKV cluster)
+#   - 3x RustFS media storage nodes (S3-compatible, independent)
+#   - 3x Maelstrom homeserver instances (chitchat gossip for ephemeral state)
+#   - 1x Caddy load balancer (round-robin across all 3 Maelstrom nodes)
+#
+# Usage:
+#   docker compose -f docker-compose.cluster.yml up -d
+#   # Wait for health checks (~60s for TiKV bootstrap)
+#   # Maelstrom available at http://localhost:8008
+#   # Run Complement: COMPLEMENT_BASE_IMAGE=complement-maelstrom make complement
+#
+# All three Maelstrom instances share the same server_name ("localhost"),
+# the same TiKV-backed SurrealDB cluster, and gossip ephemeral state
+# (typing, presence) over UDP via chitchat.
+
+services:
+
+  # ====================================================================
+  # TiKV Cluster (distributed KV storage)
+  # ====================================================================
+
+  pd:
+    image: pingcap/pd:latest
+    restart: on-failure
+    command:
+      - --name=pd
+      - --client-urls=http://0.0.0.0:2379
+      - --peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://pd:2379
+      - --advertise-peer-urls=http://pd:2380
+      - --data-dir=/data/pd
+    volumes:
+      - pd_data:/data/pd
+    networks:
+      - cluster
+
+  tikv-0:
+    image: pingcap/tikv:latest
+    restart: on-failure
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-0:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv0_data:/data/tikv
+    depends_on:
+      - pd
+    networks:
+      - cluster
+
+  tikv-1:
+    image: pingcap/tikv:latest
+    restart: on-failure
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-1:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv1_data:/data/tikv
+    depends_on:
+      - pd
+    networks:
+      - cluster
+
+  tikv-2:
+    image: pingcap/tikv:latest
+    restart: on-failure
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv-2:20160
+      - --pd=pd:2379
+      - --data-dir=/data/tikv
+    volumes:
+      - tikv2_data:/data/tikv
+    depends_on:
+      - pd
+    networks:
+      - cluster
+
+  # ====================================================================
+  # SurrealDB Cluster (3 instances, all backed by the same TiKV cluster)
+  # ====================================================================
+  # Each SurrealDB instance connects to the TiKV cluster via PD.
+  # They all see the same data — TiKV handles replication and consistency.
+  # Multiple SurrealDB instances provide connection-level redundancy.
+
+  surrealdb-0:
+    image: surrealdb/surrealdb:v3
+    restart: on-failure
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=root
+      - --bind=0.0.0.0:8000
+      - tikv://pd:2379
+    depends_on:
+      - tikv-0
+      - tikv-1
+      - tikv-2
+    healthcheck:
+      test: ["CMD", "surreal", "is-ready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    networks:
+      - cluster
+
+  surrealdb-1:
+    image: surrealdb/surrealdb:v3
+    restart: on-failure
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=root
+      - --bind=0.0.0.0:8000
+      - tikv://pd:2379
+    depends_on:
+      - tikv-0
+      - tikv-1
+      - tikv-2
+    healthcheck:
+      test: ["CMD", "surreal", "is-ready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    networks:
+      - cluster
+
+  surrealdb-2:
+    image: surrealdb/surrealdb:v3
+    restart: on-failure
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=root
+      - --bind=0.0.0.0:8000
+      - tikv://pd:2379
+    depends_on:
+      - tikv-0
+      - tikv-1
+      - tikv-2
+    healthcheck:
+      test: ["CMD", "surreal", "is-ready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    networks:
+      - cluster
+
+  # ====================================================================
+  # RustFS Media Storage (3 independent S3-compatible nodes)
+  # ====================================================================
+  # Each Maelstrom instance gets its own RustFS for media uploads.
+  # In production you'd use a shared/replicated object store, but for
+  # testing, independent nodes demonstrate that the media layer is
+  # per-instance (media is addressed by MXC URI, not instance).
+
+  rustfs-0:
+    image: minio/minio:latest
+    restart: on-failure
+    environment:
+      MINIO_ROOT_USER: maelstrom
+      MINIO_ROOT_PASSWORD: maelstrom-secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - rustfs0_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  rustfs-1:
+    image: minio/minio:latest
+    restart: on-failure
+    environment:
+      MINIO_ROOT_USER: maelstrom
+      MINIO_ROOT_PASSWORD: maelstrom-secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - rustfs1_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  rustfs-2:
+    image: minio/minio:latest
+    restart: on-failure
+    environment:
+      MINIO_ROOT_USER: maelstrom
+      MINIO_ROOT_PASSWORD: maelstrom-secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - rustfs2_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  # ====================================================================
+  # Maelstrom Homeserver Cluster (3 nodes with chitchat gossip)
+  # ====================================================================
+  # All three nodes share the same server_name and signing key (via the
+  # shared SurrealDB). The chitchat gossip protocol synchronizes ephemeral
+  # state (typing indicators, presence) over UDP without a broker.
+  #
+  # The schema is applied by the first node to start (idempotent via
+  # IF NOT EXISTS). Subsequent nodes skip schema creation.
+
+  # Build the image once, all 3 nodes reuse it.
+  # Run `docker build -t maelstrom:latest .` first, or let node-0 build it.
+  maelstrom-0:
+    image: maelstrom:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: on-failure
+    environment:
+      MAELSTROM_CONFIG: /etc/maelstrom/config.toml
+      RUST_LOG: info
+    volumes:
+      - ./config/cluster-node-0.toml:/etc/maelstrom/config.toml:ro
+    depends_on:
+      surrealdb-0:
+        condition: service_started
+      rustfs-0:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8008/_health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  maelstrom-1:
+    image: maelstrom:latest
+    restart: on-failure
+    environment:
+      MAELSTROM_CONFIG: /etc/maelstrom/config.toml
+      RUST_LOG: info
+    volumes:
+      - ./config/cluster-node-1.toml:/etc/maelstrom/config.toml:ro
+    depends_on:
+      maelstrom-0:
+        condition: service_started
+      surrealdb-1:
+        condition: service_started
+      rustfs-1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8008/_health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  maelstrom-2:
+    image: maelstrom:latest
+    restart: on-failure
+    environment:
+      MAELSTROM_CONFIG: /etc/maelstrom/config.toml
+      RUST_LOG: info
+    volumes:
+      - ./config/cluster-node-2.toml:/etc/maelstrom/config.toml:ro
+    depends_on:
+      maelstrom-0:
+        condition: service_started
+      surrealdb-2:
+        condition: service_started
+      rustfs-2:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8008/_health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cluster
+
+  # ====================================================================
+  # Caddy Load Balancer (reverse proxy, round-robin)
+  # ====================================================================
+  # Exposes port 8008 on localhost. Distributes requests across all 3
+  # Maelstrom nodes. Complement tests and Matrix clients connect here.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: on-failure
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./config/Caddyfile.cluster:/etc/caddy/Caddyfile:ro
+    depends_on:
+      maelstrom-0:
+        condition: service_started
+      maelstrom-1:
+        condition: service_started
+      maelstrom-2:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8008/_health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cluster
+
+networks:
+  cluster:
+    driver: bridge
+
+volumes:
+  pd_data:
+  tikv0_data:
+  tikv1_data:
+  tikv2_data:
+  rustfs0_data:
+  rustfs1_data:
+  rustfs2_data:

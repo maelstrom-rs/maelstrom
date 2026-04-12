@@ -1,6 +1,7 @@
 .PHONY: help build test check fmt lint clean \
        dev-up dev-down dev-logs \
        stack-up stack-down stack-logs \
+       cluster-up cluster-down cluster-logs cluster-reset \
        db-init db-drop db-shell \
        complement complement-list complement-build \
        run
@@ -67,6 +68,32 @@ stack-logs: ## Tail full stack logs
 
 stack-reset: ## Stop full stack and wipe all data
 	docker compose down -v
+
+# -- Cluster (3x Maelstrom + 3x SurrealDB/TiKV + 3x RustFS + Caddy LB) --
+cluster-up: ## Start full 3-node clustered environment
+	@echo "Building Maelstrom image (once)..."
+	docker build -t maelstrom:latest .
+	@echo "Starting cluster (all services restart until dependencies are ready)..."
+	-docker compose -f docker-compose.cluster.yml up -d
+	@echo ""
+	@echo "Cluster starting — TiKV takes ~60s to bootstrap."
+	@echo "Services will auto-restart until ready. Monitor with:"
+	@echo "  make cluster-status"
+	@echo "  make cluster-logs"
+	@echo ""
+	@echo "Once healthy, Maelstrom is at http://localhost:8008"
+
+cluster-down: ## Stop cluster
+	docker compose -f docker-compose.cluster.yml down
+
+cluster-logs: ## Tail cluster logs
+	docker compose -f docker-compose.cluster.yml logs -f
+
+cluster-reset: ## Stop cluster and wipe all data
+	docker compose -f docker-compose.cluster.yml down -v
+
+cluster-status: ## Show cluster container health
+	docker compose -f docker-compose.cluster.yml ps
 
 # -- Database ------------------------------------------------------------
 db-init: ## Bootstrap the schema against a running SurrealDB

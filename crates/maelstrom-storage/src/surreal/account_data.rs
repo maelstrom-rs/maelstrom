@@ -132,7 +132,7 @@ impl AccountDataStore for SurrealStorage {
         let room_val = room_id.unwrap_or("").to_string();
 
         self.db()
-            .query("DELETE account_data WHERE user_id = $uid AND room_id = $rid AND data_type = $dtype")
+            .query("DELETE FROM account_data WHERE user_id = $uid AND room_id = $rid AND data_type = $dtype")
             .bind(("uid", user_id.to_string()))
             .bind(("rid", room_val))
             .bind(("dtype", data_type.to_string()))

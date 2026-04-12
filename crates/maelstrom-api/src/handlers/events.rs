@@ -392,16 +392,17 @@ async fn get_messages(
         }
     };
 
-    // For departed users: limit messages to events up to when they left
-    let leave_pos = if membership == Membership::Leave.as_str() {
-        storage
-            .get_state_event(&room_id, et::MEMBER, &sender)
-            .await
-            .ok()
-            .map(|e| e.stream_position)
-    } else {
-        None
-    };
+    // For departed users: limit messages to events up to when they left/were banned
+    let leave_pos =
+        if membership == Membership::Leave.as_str() || membership == Membership::Ban.as_str() {
+            storage
+                .get_state_event(&room_id, et::MEMBER, &sender)
+                .await
+                .ok()
+                .map(|e| e.stream_position)
+        } else {
+            None
+        };
 
     let mut events = storage
         .get_room_events(&room_id, from, limit, dir)

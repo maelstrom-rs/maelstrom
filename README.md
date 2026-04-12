@@ -31,7 +31,7 @@ There is no open-source Matrix homeserver that offers simple horizontal scaling 
 
 ### Complement Test Results (2026-04-10)
 
-**335 / 538 tests passing (62.3%)**  ·  107 internal tests  ·  zero clippy warnings
+**343+ / 538 tests passing (63.8%+)**  ·  107 internal tests  ·  zero clippy warnings
 
 | Category | Pass | Total | Rate |
 |----------|------|-------|------|

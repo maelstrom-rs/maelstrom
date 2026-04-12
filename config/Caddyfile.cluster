@@ -1,0 +1,18 @@
+# Caddy reverse proxy for Maelstrom cluster.
+# Round-robin load balancing across 3 Maelstrom nodes.
+# Exposes port 8008 — all Matrix client and Complement traffic comes here.
+
+:8008 {
+	reverse_proxy maelstrom-0:8008 maelstrom-1:8008 maelstrom-2:8008 {
+		# Round-robin (Caddy default) distributes requests evenly.
+		# Health checks ensure failed nodes are removed from rotation.
+		health_uri /_health/live
+		health_interval 5s
+		health_timeout 3s
+
+		# Sticky sessions via header — Matrix clients send Authorization
+		# tokens that should ideally hit the same node for sync long-polling,
+		# but since state is in TiKV, any node can handle any request.
+		# lb_policy round_robin
+	}
+}

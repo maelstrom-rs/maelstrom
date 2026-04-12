@@ -2,7 +2,7 @@
 # Also used as the Complement test image (exposes 8008 + 8448).
 
 # -- Stage 1: Build --
-FROM rust:latest AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /build
 
@@ -26,6 +26,7 @@ RUN cargo build --release 2>/dev/null || true
 # Copy real source and build
 COPY src/ src/
 COPY crates/ crates/
+COPY db/ db/
 
 # Touch source files to invalidate cache
 RUN find src crates -name "*.rs" -exec touch {} +

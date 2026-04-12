@@ -294,37 +294,86 @@ fn default_search_limit() -> usize {
 
 async fn search_user_directory(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth: AuthenticatedUser,
     MatrixJson(body): MatrixJson<UserDirectorySearchRequest>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let limit = body.limit.min(50);
     let server_name = state.server_name();
+    let storage = state.storage();
+    let sender = auth.user_id.to_string();
 
-    let results = state
-        .storage()
-        .search_users(&body.search_term, limit)
+    // Fetch candidates from storage (searches by localpart and global display name).
+    let candidates = storage
+        .search_users(&body.search_term, limit * 5)
         .await
         .map_err(crate::extractors::storage_error)?;
 
-    let results: Vec<serde_json::Value> = results
-        .into_iter()
-        .map(|(localpart, display_name, avatar_url)| {
-            let mut entry = serde_json::json!({
-                "user_id": format!("@{localpart}:{server_name}"),
-            });
-            if let Some(name) = display_name {
-                entry["display_name"] = serde_json::Value::String(name);
+    // Get rooms the requesting user has joined (full Matrix user ID required).
+    let my_rooms: Vec<String> = storage.get_joined_rooms(&sender).await.unwrap_or_default();
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for (localpart, global_display_name, avatar_url) in candidates {
+        if results.len() >= limit {
+            break;
+        }
+
+        let full_user_id = format!("@{localpart}:{server_name}");
+
+        // Skip self
+        if full_user_id == sender {
+            continue;
+        }
+
+        // Shared-room filtering: only return users who share at least one room
+        // with the requesting user.
+        let candidate_rooms: Vec<String> = storage
+            .get_joined_rooms(&full_user_id)
+            .await
+            .unwrap_or_default();
+        let shared: Vec<&String> = my_rooms
+            .iter()
+            .filter(|r| candidate_rooms.contains(r))
+            .collect();
+
+        if shared.is_empty() {
+            continue; // not in any shared room — skip
+        }
+
+        // Look up room-specific display name from any shared room's member event.
+        // This handles the case where a user set a per-room displayname that
+        // differs from their global profile displayname.
+        let mut room_display_name: Option<String> = None;
+        for room_id in &shared {
+            if let Ok(member_event) = storage
+                .get_state_event(room_id, et::MEMBER, &full_user_id)
+                .await
+                && let Some(dn) = member_event
+                    .content
+                    .get("displayname")
+                    .and_then(|d| d.as_str())
+            {
+                room_display_name = Some(dn.to_string());
+                break;
             }
-            if let Some(url) = avatar_url {
-                entry["avatar_url"] = serde_json::Value::String(url);
-            }
-            entry
-        })
-        .collect();
+        }
+
+        let effective_display_name = room_display_name.or(global_display_name);
+
+        let mut entry = serde_json::json!({
+            "user_id": full_user_id,
+        });
+        if let Some(name) = effective_display_name {
+            entry["display_name"] = serde_json::Value::String(name);
+        }
+        if let Some(url) = avatar_url {
+            entry["avatar_url"] = serde_json::Value::String(url);
+        }
+        results.push(entry);
+    }
 
     Ok(Json(serde_json::json!({
         "results": results,
-        "limited": false,
+        "limited": results.len() >= limit,
     })))
 }
 

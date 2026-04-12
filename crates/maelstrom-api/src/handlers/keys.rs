@@ -47,6 +47,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::server_name_from_sigil_id;
 
 use crate::extractors::{AuthenticatedUser, storage_error};
 use crate::state::AppState;
@@ -237,25 +238,37 @@ async fn keys_query(
         .map(|obj| obj.keys().cloned().collect())
         .unwrap_or_default();
 
-    // Get device keys for all requested users
-    let mut device_keys = storage
-        .get_device_keys(&user_ids)
-        .await
-        .map_err(storage_error)?;
+    let local_server = state.server_name().as_str();
 
-    // Ensure every queried user has an entry (even if empty)
-    if let Some(obj) = device_keys.as_object_mut() {
-        for uid in &user_ids {
-            obj.entry(uid.clone()).or_insert(serde_json::json!({}));
+    // Partition users into local and remote
+    let mut local_user_ids: Vec<String> = Vec::new();
+    let mut remote_users: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for uid in &user_ids {
+        let server = server_name_from_sigil_id(uid);
+        if server == local_server || server.is_empty() {
+            local_user_ids.push(uid.clone());
+        } else {
+            remote_users
+                .entry(server.to_string())
+                .or_default()
+                .push(uid.clone());
         }
     }
 
-    // Get cross-signing keys for each user
+    // Get device keys for local users
+    let mut device_keys = storage
+        .get_device_keys(&local_user_ids)
+        .await
+        .map_err(storage_error)?;
+
+    // Get cross-signing keys for local users
     let mut master_keys = serde_json::Map::new();
     let mut self_signing_keys = serde_json::Map::new();
     let mut user_signing_keys = serde_json::Map::new();
 
-    for uid in &user_ids {
+    for uid in &local_user_ids {
         let cross_keys = storage
             .get_cross_signing_keys(uid)
             .await
@@ -274,9 +287,88 @@ async fn keys_query(
         }
     }
 
+    // Query remote servers via federation for remote users' device keys
+    let mut failures = serde_json::Map::new();
+    if let Some(fed) = state.federation() {
+        for (server, uids) in &remote_users {
+            // Build the device_keys request for this remote server
+            let mut remote_device_keys_req = serde_json::Map::new();
+            if let Some(req_device_keys) = body.get("device_keys").and_then(|v| v.as_object()) {
+                for uid in uids {
+                    if let Some(device_ids) = req_device_keys.get(uid) {
+                        remote_device_keys_req.insert(uid.clone(), device_ids.clone());
+                    }
+                }
+            }
+
+            let query_body = serde_json::json!({
+                "device_keys": remote_device_keys_req
+            });
+
+            match fed
+                .post_json(
+                    server,
+                    "/_matrix/federation/v1/user/keys/query",
+                    &query_body,
+                )
+                .await
+            {
+                Ok(resp) => {
+                    // Merge remote device_keys into our response
+                    if let Some(remote_dk) = resp.get("device_keys").and_then(|d| d.as_object())
+                        && let Some(dk_obj) = device_keys.as_object_mut()
+                    {
+                        for (uid, devices) in remote_dk {
+                            dk_obj.insert(uid.clone(), devices.clone());
+                        }
+                    }
+                    // Merge master_keys
+                    if let Some(remote_mk) = resp.get("master_keys").and_then(|d| d.as_object()) {
+                        for (uid, key) in remote_mk {
+                            master_keys.insert(uid.clone(), key.clone());
+                        }
+                    }
+                    // Merge self_signing_keys
+                    if let Some(remote_ssk) =
+                        resp.get("self_signing_keys").and_then(|d| d.as_object())
+                    {
+                        for (uid, key) in remote_ssk {
+                            self_signing_keys.insert(uid.clone(), key.clone());
+                        }
+                    }
+                    // Merge user_signing_keys
+                    if let Some(remote_usk) =
+                        resp.get("user_signing_keys").and_then(|d| d.as_object())
+                    {
+                        for (uid, key) in remote_usk {
+                            user_signing_keys.insert(uid.clone(), key.clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(server = %server, error = %e, "Failed to query remote server for device keys");
+                    failures.insert(
+                        server.clone(),
+                        serde_json::json!({
+                            "errcode": "M_UNKNOWN",
+                            "error": e.to_string()
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    // Ensure every queried user has an entry (even if empty)
+    if let Some(obj) = device_keys.as_object_mut() {
+        for uid in &user_ids {
+            obj.entry(uid.clone()).or_insert(serde_json::json!({}));
+        }
+    }
+
     let mut response = serde_json::json!({
         "device_keys": device_keys,
-        "failures": {},
+        "failures": failures,
     });
 
     // Only include cross-signing sections if they have data

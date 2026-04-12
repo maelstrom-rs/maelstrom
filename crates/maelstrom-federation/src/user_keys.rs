@@ -34,22 +34,29 @@
 //! These keys are essential for clients to establish Olm/Megolm sessions and verify
 //! device trust.
 
-use axum::extract::State;
-use axum::routing::post;
+use axum::extract::{Path, State};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use serde_json::json;
 use tracing::debug;
 
 use maelstrom_core::matrix::error::MatrixError;
+use maelstrom_core::matrix::id::server_name_from_sigil_id;
 
 use crate::FederationState;
 
 /// Build the user keys sub-router with the device key query endpoint.
 pub fn routes() -> Router<FederationState> {
-    Router::new().route(
-        "/_matrix/federation/v1/user/keys/query",
-        post(query_user_keys),
-    )
+    Router::new()
+        .route(
+            "/_matrix/federation/v1/user/keys/query",
+            post(query_user_keys),
+        )
+        .route(
+            "/_matrix/federation/v1/user/devices/{userId}",
+            get(get_user_devices),
+        )
 }
 
 /// Request body for the federation device key query.
@@ -130,5 +137,64 @@ async fn query_user_keys(
         "device_keys": result_keys,
         "master_keys": master_keys,
         "self_signing_keys": self_signing_keys,
+    })))
+}
+
+/// GET /_matrix/federation/v1/user/devices/{userId}
+///
+/// Returns all device information for a local user, including device keys.
+/// Per Server-Server API section 2.7.
+async fn get_user_devices(
+    State(state): State<FederationState>,
+    Path(user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    // Check user is on our server
+    let server = server_name_from_sigil_id(&user_id);
+    if server != state.server_name().as_str() {
+        return Err(MatrixError::not_found("User not on this server"));
+    }
+
+    let user_id_typed = maelstrom_core::matrix::id::UserId::parse(&user_id)
+        .map_err(|_| MatrixError::not_found("Invalid user ID"))?;
+
+    let devices = state
+        .storage()
+        .list_devices(&user_id_typed)
+        .await
+        .unwrap_or_default();
+
+    // Get device keys for this user (returns user_id -> { device_id -> keys })
+    let all_keys = state
+        .storage()
+        .get_device_keys(std::slice::from_ref(&user_id))
+        .await
+        .unwrap_or(json!({}));
+    let user_keys = all_keys.get(&user_id).cloned().unwrap_or(json!({}));
+
+    let mut device_list = Vec::new();
+    for device in &devices {
+        let keys = user_keys
+            .get(&device.device_id)
+            .cloned()
+            .unwrap_or(json!({}));
+        device_list.push(json!({
+            "device_id": device.device_id,
+            "keys": keys,
+            "device_display_name": device.display_name,
+        }));
+    }
+
+    let stream_id = state.storage().current_stream_position().await.unwrap_or(1);
+
+    debug!(
+        user_id = %user_id,
+        devices = device_list.len(),
+        "Federation user devices query"
+    );
+
+    Ok(Json(json!({
+        "user_id": user_id,
+        "stream_id": stream_id,
+        "devices": device_list,
     })))
 }

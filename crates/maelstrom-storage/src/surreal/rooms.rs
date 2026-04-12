@@ -506,9 +506,10 @@ impl RoomStore for SurrealStorage {
     async fn forget_room(&self, user_id: &str, room_id: &str) -> StorageResult<()> {
         debug!(user_id = %user_id, room_id = %room_id, "Forgetting room");
 
-        // Remove the graph edge entirely (only if membership is 'leave')
+        // Remove the graph edge entirely for any non-join/non-invite membership
+        // (leave or ban). Per spec, the user must have left before forgetting.
         self.db()
-            .query("DELETE member_of WHERE in = $user_rid AND out = $room_rid AND membership = 'leave'")
+            .query("DELETE member_of WHERE in = $user_rid AND out = $room_rid AND membership IN ['leave', 'ban']")
             .bind(("user_rid", user_rid_from_matrix_id(user_id)))
             .bind(("room_rid", room_rid(room_id)))
             .await
