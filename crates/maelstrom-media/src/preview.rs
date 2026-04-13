@@ -110,17 +110,31 @@ pub async fn fetch_og_metadata(url: &str) -> Result<OgMetadata, MediaError> {
             String::new()
         };
 
-        if !full_url.is_empty()
-            && let Ok(img_resp) = reqwest::Client::builder()
+        if !full_url.is_empty() {
+            let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
-                .unwrap_or_default()
-                .head(&full_url)
-                .send()
-                .await
-            && let Some(len) = img_resp.content_length()
-        {
-            meta.image_size = Some(len);
+                .unwrap_or_default();
+            // Try HEAD first for Content-Length, fall back to GET
+            let size = if let Ok(head_resp) = client.head(&full_url).send().await {
+                head_resp.content_length().filter(|&len| len > 0)
+            } else {
+                None
+            };
+            let size = if size.is_none() {
+                // HEAD didn't give us a size; fetch the image body
+                if let Ok(get_resp) = client.get(&full_url).send().await
+                    && let Ok(bytes) = get_resp.bytes().await
+                {
+                    let len = bytes.len() as u64;
+                    if len > 0 { Some(len) } else { None }
+                } else {
+                    None
+                }
+            } else {
+                size
+            };
+            meta.image_size = size;
         }
     }
 

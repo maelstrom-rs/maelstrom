@@ -227,7 +227,22 @@ impl RoomStore for SurrealStorage {
     async fn get_left_rooms(&self, user_id: &str) -> StorageResult<Vec<String>> {
         let mut response = self
             .db()
-            .query("SELECT room_id FROM member_of WHERE in = $user_rid AND membership = 'leave'")
+            .query("SELECT room_id FROM member_of WHERE in = $user_rid AND membership = 'leave' AND forgotten = false")
+            .bind(("user_rid", user_rid_from_matrix_id(user_id)))
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let rows: Vec<RoomIdRow> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        Ok(rows.into_iter().map(|r| r.room_id).collect())
+    }
+
+    async fn get_forgotten_rooms(&self, user_id: &str) -> StorageResult<Vec<String>> {
+        let mut response = self
+            .db()
+            .query("SELECT room_id FROM member_of WHERE in = $user_rid AND membership IN ['leave', 'ban'] AND forgotten = true")
             .bind(("user_rid", user_rid_from_matrix_id(user_id)))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
@@ -506,16 +521,38 @@ impl RoomStore for SurrealStorage {
     async fn forget_room(&self, user_id: &str, room_id: &str) -> StorageResult<()> {
         debug!(user_id = %user_id, room_id = %room_id, "Forgetting room");
 
-        // Remove the graph edge entirely for any non-join/non-invite membership
-        // (leave or ban). Per spec, the user must have left before forgetting.
+        // Mark the membership edge as forgotten rather than deleting it,
+        // so that is_room_forgotten checks work and messages return 403.
         self.db()
-            .query("DELETE member_of WHERE in = $user_rid AND out = $room_rid AND membership IN ['leave', 'ban']")
+            .query("UPDATE member_of SET forgotten = true WHERE in = $user_rid AND out = $room_rid AND membership IN ['leave', 'ban']")
             .bind(("user_rid", user_rid_from_matrix_id(user_id)))
             .bind(("room_rid", room_rid(room_id)))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
         Ok(())
+    }
+
+    async fn is_room_forgotten(&self, user_id: &str, room_id: &str) -> StorageResult<bool> {
+        let mut response = self
+            .db()
+            .query(
+                "SELECT forgotten FROM member_of WHERE in = $user_rid AND out = $room_rid LIMIT 1",
+            )
+            .bind(("user_rid", user_rid_from_matrix_id(user_id)))
+            .bind(("room_rid", room_rid(room_id)))
+            .await
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        let rows: Vec<serde_json::Value> = response
+            .take(0)
+            .map_err(|e| StorageError::Query(e.to_string()))?;
+
+        Ok(rows
+            .first()
+            .and_then(|r| r.get("forgotten"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 
     async fn store_room_upgrade(

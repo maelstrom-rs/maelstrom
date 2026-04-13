@@ -1,7 +1,7 @@
 //! Sync endpoints -- traditional `/sync` and sliding sync.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 10 Sync](https://spec.matrix.org/v1.13/client-server-api/#syncing)):
+//! ([spec: 10 Sync](https://spec.matrix.org/v1.18/client-server-api/#syncing)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|
@@ -563,7 +563,7 @@ async fn sync(
         // Re-query left rooms after wake-up
         let left_rooms = storage.get_left_rooms(&user_id).await.unwrap_or_default();
         let mut leave_map: HashMap<String, serde_json::Value> = HashMap::new();
-        if include_leave || sync_filter.is_none() {
+        {
             for room_id in &left_rooms {
                 // Get leave position
                 let leave_pos = storage
@@ -612,6 +612,8 @@ async fn sync(
                     }
                 }
 
+                let timeline_events =
+                    annotate_membership(timeline_events, Membership::Leave.as_str());
                 leave_map.insert(room_id.clone(), serde_json::json!({
                     "state": { "events": [] },
                     "timeline": { "events": timeline_events, "prev_batch": since.to_string(), "limited": false },
@@ -698,10 +700,22 @@ async fn sync(
         );
     }
 
-    // Build leave section (only if filter includes leave rooms)
+    // Build leave section. For incremental sync, newly-left rooms always appear
+    // in the leave section regardless of the include_leave filter (per spec, the
+    // filter only controls whether LEFT rooms appear in initial sync). For initial
+    // sync, respect include_leave.
+    // Include forgotten rooms in incremental sync so other devices can see the leave.
+    let mut all_left_rooms = left_rooms.clone();
+    if !is_initial && let Ok(forgotten) = storage.get_forgotten_rooms(&user_id).await {
+        for room_id in forgotten {
+            if !all_left_rooms.contains(&room_id) {
+                all_left_rooms.push(room_id);
+            }
+        }
+    }
     let mut leave_map: HashMap<String, serde_json::Value> = HashMap::new();
-    if include_leave || sync_filter.is_none() {
-        for room_id in &left_rooms {
+    if !is_initial || include_leave || sync_filter.is_none() {
+        for room_id in &all_left_rooms {
             // For incremental sync, only include rooms where the leave happened after `since`
             if !is_initial {
                 let leave_pos = storage
@@ -790,21 +804,31 @@ async fn sync(
                             }
                         }
                     }
-                    // Ensure the leave event itself is included
-                    if let Ok(member_event) =
+                }
+            }
+
+            // Always include the user's own leave event (even when
+            // history_visibility is "joined"), but only if the timeline type
+            // filter allows m.room.member events (or there is no filter).
+            if !is_initial {
+                let leave_passes_filter = timeline_types
+                    .as_ref()
+                    .map(|types| types.contains(&et::MEMBER.to_string()))
+                    .unwrap_or(true);
+                if leave_passes_filter
+                    && let Ok(member_event) =
                         storage.get_state_event(room_id, et::MEMBER, &user_id).await
-                    {
-                        let leave_json = member_event.to_client_event().into_json();
-                        let leave_eid = leave_json
-                            .get("event_id")
-                            .and_then(|e| e.as_str())
-                            .unwrap_or("");
-                        let already = timeline_events.iter().any(|e| {
-                            e.get("event_id").and_then(|eid| eid.as_str()) == Some(leave_eid)
-                        });
-                        if !already {
-                            timeline_events.push(leave_json);
-                        }
+                {
+                    let leave_json = member_event.to_client_event().into_json();
+                    let leave_eid = leave_json
+                        .get("event_id")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("");
+                    let already = timeline_events
+                        .iter()
+                        .any(|e| e.get("event_id").and_then(|eid| eid.as_str()) == Some(leave_eid));
+                    if !already {
+                        timeline_events.push(leave_json);
                     }
                 }
             }
@@ -845,6 +869,8 @@ async fn sync(
                 }
             }
 
+            let state_events = annotate_membership(state_events, Membership::Leave.as_str());
+            let timeline_events = annotate_membership(timeline_events, Membership::Leave.as_str());
             leave_map.insert(
                 room_id.clone(),
                 serde_json::json!({
@@ -945,22 +971,16 @@ async fn build_initial_sync(
             .get_all_room_account_data(user_id, room_id)
             .await
             .unwrap_or_default();
-        let room_ad = if room_account_data.is_empty() {
-            None
-        } else {
-            let events: Vec<_> = room_account_data
-                .into_iter()
-                .filter(|(_, content)| {
-                    content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
-                })
-                .map(|(dtype, content)| serde_json::json!({ "type": dtype, "content": content }))
-                .collect();
-            if events.is_empty() {
-                None
-            } else {
-                Some(AccountDataResponse { events })
-            }
-        };
+        let room_ad_events: Vec<_> = room_account_data
+            .into_iter()
+            .filter(|(_, content)| {
+                content.get("_msc3391_deleted").and_then(|v| v.as_bool()) != Some(true)
+            })
+            .map(|(dtype, content)| serde_json::json!({ "type": dtype, "content": content }))
+            .collect();
+        let room_ad = Some(AccountDataResponse {
+            events: room_ad_events,
+        });
 
         // Room summary: member counts
         let joined_count = storage

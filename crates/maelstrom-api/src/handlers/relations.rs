@@ -27,8 +27,8 @@
 //!
 //! # Matrix spec
 //!
-//! * [Relationships between events](https://spec.matrix.org/v1.12/client-server-api/#relationships-between-events)
-//! * [Aggregations of child events](https://spec.matrix.org/v1.12/client-server-api/#aggregations-of-child-events)
+//! * [Relationships between events](https://spec.matrix.org/v1.18/client-server-api/#relationships-between-events)
+//! * [Aggregations of child events](https://spec.matrix.org/v1.18/client-server-api/#aggregations-of-child-events)
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
@@ -61,7 +61,6 @@ struct RelationsQuery {
     #[serde(default = "default_limit")]
     limit: usize,
     from: Option<String>,
-    #[allow(dead_code)]
     dir: Option<String>,
 }
 
@@ -116,6 +115,7 @@ async fn get_relations(
         None,
         query.limit,
         query.from.as_deref(),
+        query.dir.as_deref(),
     )
     .await
 }
@@ -134,6 +134,7 @@ async fn get_relations_by_type(
         None,
         query.limit,
         query.from.as_deref(),
+        query.dir.as_deref(),
     )
     .await
 }
@@ -152,6 +153,7 @@ async fn get_relations_by_type_and_event_type(
         Some(&params.event_type),
         query.limit,
         query.from.as_deref(),
+        query.dir.as_deref(),
     )
     .await
 }
@@ -163,28 +165,67 @@ async fn fetch_relations(
     event_type: Option<&str>,
     limit: usize,
     from: Option<&str>,
+    dir: Option<&str>,
 ) -> Result<Json<serde_json::Value>, MatrixError> {
+    let effective_limit = limit.min(100);
+    let dir = dir.unwrap_or("b"); // default: newest first (backward)
+    let from_pos: Option<i64> = from.and_then(|s| s.parse().ok());
+
+    // Fetch all relations (no cursor at storage level — we paginate in handler)
     let relations = state
         .storage()
-        .get_relations(event_id, rel_type, event_type, limit.min(100), from)
+        .get_relations(event_id, rel_type, event_type, 1000, None)
         .await
         .map_err(crate::extractors::storage_error)?;
 
-    // Fetch the actual events for each relation
-    let mut chunk = Vec::new();
+    // Fetch the actual events and their stream positions
+    let mut events_with_pos: Vec<(serde_json::Value, i64)> = Vec::new();
     for rel in &relations {
         if let Ok(event) = state.storage().get_event(&rel.event_id).await {
-            chunk.push(event.to_client_event().into_json());
+            let pos = event.stream_position;
+            let json = event.to_client_event().into_json();
+            events_with_pos.push((json, pos));
         }
     }
 
-    // Return next_batch if there are more results (we fetched limit items)
+    // Sort by stream_position according to direction
+    if dir == "f" {
+        events_with_pos.sort_by_key(|(_, pos)| *pos);
+    } else {
+        events_with_pos.sort_by_key(|(_, pos)| std::cmp::Reverse(*pos));
+    }
+
+    // Apply from cursor filter (stream position based), then take limit
+    let events_with_pos: Vec<_> = if let Some(cursor) = from_pos {
+        events_with_pos
+            .into_iter()
+            .filter(|(_, pos)| {
+                if dir == "f" {
+                    *pos > cursor
+                } else {
+                    *pos < cursor
+                }
+            })
+            .take(effective_limit)
+            .collect()
+    } else {
+        events_with_pos.into_iter().take(effective_limit).collect()
+    };
+
+    let chunk: Vec<serde_json::Value> = events_with_pos.iter().map(|(e, _)| e.clone()).collect();
+
+    // Build response with pagination tokens
     let mut response = serde_json::json!({ "chunk": chunk });
-    if chunk.len() == limit.min(100) {
-        // Use the last event_id as the cursor token
-        if let Some(last) = relations.last() {
-            response["next_batch"] = serde_json::json!(last.event_id);
-        }
+    if chunk.len() == effective_limit
+        && let Some(last) = events_with_pos.last()
+    {
+        response["next_batch"] = serde_json::json!(last.1.to_string());
+    }
+    // Include prev_batch when we have a from token
+    if from_pos.is_some()
+        && let Some(first) = events_with_pos.first()
+    {
+        response["prev_batch"] = serde_json::json!(first.1.to_string());
     }
 
     Ok(Json(response))
@@ -241,11 +282,20 @@ pub async fn build_aggregations(
             .unwrap_or_default();
 
         let count = all_replies.len();
-        let latest = all_replies.last();
 
-        if let Some(latest_rel) = latest
-            && let Ok(latest_event) = storage.get_event(&latest_rel.event_id).await
-        {
+        // Find the reply with the highest stream_position (most recent)
+        let mut latest_event_opt = None;
+        let mut max_pos = i64::MIN;
+        for rel in &all_replies {
+            if let Ok(ev) = storage.get_event(&rel.event_id).await
+                && ev.stream_position > max_pos
+            {
+                max_pos = ev.stream_position;
+                latest_event_opt = Some(ev);
+            }
+        }
+
+        if let Some(latest_event) = latest_event_opt {
             aggregations.insert(
                 "m.thread".to_string(),
                 serde_json::json!({

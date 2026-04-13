@@ -1,7 +1,7 @@
 //! User profile management -- display names, avatars, and user directory search.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 7.1 Profiles](https://spec.matrix.org/v1.13/client-server-api/#profiles)):
+//! ([spec: 7.1 Profiles](https://spec.matrix.org/v1.18/client-server-api/#profiles)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|
@@ -311,6 +311,13 @@ async fn search_user_directory(
     // Get rooms the requesting user has joined (full Matrix user ID required).
     let my_rooms: Vec<String> = storage.get_joined_rooms(&sender).await.unwrap_or_default();
 
+    // Cache public room IDs for visibility checks.
+    let public_room_ids: std::collections::HashSet<String> = storage
+        .get_public_rooms(1000, None, None)
+        .await
+        .map(|(rooms, _)| rooms.into_iter().map(|r| r.room_id).collect())
+        .unwrap_or_default();
+
     let mut results: Vec<serde_json::Value> = Vec::new();
     for (localpart, global_display_name, avatar_url) in candidates {
         if results.len() >= limit {
@@ -324,8 +331,9 @@ async fn search_user_directory(
             continue;
         }
 
-        // Shared-room filtering: only return users who share at least one room
-        // with the requesting user.
+        // Visibility: a user is visible in the directory if they either:
+        // 1. Share a room with the requester, OR
+        // 2. Are in at least one public room (per spec § 10.5)
         let candidate_rooms: Vec<String> = storage
             .get_joined_rooms(&full_user_id)
             .await
@@ -336,12 +344,13 @@ async fn search_user_directory(
             .collect();
 
         if shared.is_empty() {
-            continue; // not in any shared room — skip
+            let has_public_room = candidate_rooms.iter().any(|r| public_room_ids.contains(r));
+            if !has_public_room {
+                continue;
+            }
         }
 
-        // Look up room-specific display name from any shared room's member event.
-        // This handles the case where a user set a per-room displayname that
-        // differs from their global profile displayname.
+        // Look up room-specific display name from shared rooms' member events.
         let mut room_display_name: Option<String> = None;
         for room_id in &shared {
             if let Ok(member_event) = storage
@@ -357,7 +366,8 @@ async fn search_user_directory(
             }
         }
 
-        let effective_display_name = room_display_name.or(global_display_name);
+        // Prefer profile display name; fall back to room-specific display name
+        let effective_display_name = global_display_name.or(room_display_name);
 
         let mut entry = serde_json::json!({
             "user_id": full_user_id,

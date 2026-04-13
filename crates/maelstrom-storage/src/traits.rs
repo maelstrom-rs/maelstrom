@@ -232,6 +232,8 @@ pub trait RoomStore: Send + Sync {
     async fn get_joined_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
     async fn get_invited_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
     async fn get_left_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
+    /// Get rooms the user has left AND forgotten (for incremental sync).
+    async fn get_forgotten_rooms(&self, user_id: &str) -> StorageResult<Vec<String>>;
     async fn get_room_members(&self, room_id: &str, membership: &str)
     -> StorageResult<Vec<String>>;
     async fn set_room_alias(&self, alias: &str, room_id: &str, creator: &str) -> StorageResult<()>;
@@ -247,6 +249,9 @@ pub trait RoomStore: Send + Sync {
         filter: Option<&str>,
     ) -> StorageResult<(Vec<PublicRoom>, usize)>;
     async fn forget_room(&self, user_id: &str, room_id: &str) -> StorageResult<()>;
+
+    /// Check whether a user has forgotten a room.
+    async fn is_room_forgotten(&self, user_id: &str, room_id: &str) -> StorageResult<bool>;
 
     /// Store a room upgrade edge: old_room --upgrades_to--> new_room.
     async fn store_room_upgrade(

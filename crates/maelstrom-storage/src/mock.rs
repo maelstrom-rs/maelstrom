@@ -366,9 +366,28 @@ impl RoomStore for MockStorage {
 
     async fn get_left_rooms(&self, user_id: &str) -> StorageResult<Vec<String>> {
         let membership = self.membership.lock().unwrap();
+        let forgotten = self.forgotten.lock().unwrap();
         Ok(membership
             .iter()
-            .filter(|((uid, _), state)| uid == user_id && *state == Membership::Leave.as_str())
+            .filter(|((uid, rid), state)| {
+                uid == user_id
+                    && *state == Membership::Leave.as_str()
+                    && !forgotten.contains(&(uid.clone(), rid.clone()))
+            })
+            .map(|((_, room_id), _)| room_id.clone())
+            .collect())
+    }
+
+    async fn get_forgotten_rooms(&self, user_id: &str) -> StorageResult<Vec<String>> {
+        let membership = self.membership.lock().unwrap();
+        let forgotten = self.forgotten.lock().unwrap();
+        Ok(membership
+            .iter()
+            .filter(|((uid, rid), state)| {
+                uid == user_id
+                    && (*state == Membership::Leave.as_str() || *state == Membership::Ban.as_str())
+                    && forgotten.contains(&(uid.clone(), rid.clone()))
+            })
             .map(|((_, room_id), _)| room_id.clone())
             .collect())
     }
@@ -593,6 +612,14 @@ impl RoomStore for MockStorage {
             .unwrap()
             .insert((user_id.to_string(), room_id.to_string()));
         Ok(())
+    }
+
+    async fn is_room_forgotten(&self, user_id: &str, room_id: &str) -> StorageResult<bool> {
+        Ok(self
+            .forgotten
+            .lock()
+            .unwrap()
+            .contains(&(user_id.to_string(), room_id.to_string())))
     }
 
     async fn store_room_upgrade(

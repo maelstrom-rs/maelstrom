@@ -221,19 +221,15 @@ impl RelationStore for SurrealStorage {
         limit: usize,
         _from: Option<i64>,
     ) -> StorageResult<Vec<String>> {
-        // Find thread roots ordered by their latest reply (most recently active first)
+        // Fetch all thread relations with their child event IDs
         let mut response = self
             .db()
             .query(
-                "SELECT parent_event_id, math::max(id) AS latest_reply \
+                "SELECT parent_event_id, child_event_id \
                  FROM relates_to \
-                 WHERE room_id = $rid AND rel_type = 'm.thread' \
-                 GROUP BY parent_event_id \
-                 ORDER BY latest_reply DESC \
-                 LIMIT $lim",
+                 WHERE room_id = $rid AND rel_type = 'm.thread'",
             )
             .bind(("rid", room_id.to_string()))
-            .bind(("lim", limit as i64))
             .await
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
@@ -241,10 +237,36 @@ impl RelationStore for SurrealStorage {
             .take(0)
             .map_err(|e| StorageError::Query(e.to_string()))?;
 
-        Ok(rows
-            .iter()
-            .filter_map(|r| r.get("parent_event_id")?.as_str().map(|s| s.to_string()))
-            .collect())
+        // Group by parent_event_id, track max child stream_position per group
+        let mut thread_latest: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for row in &rows {
+            let parent = match row.get("parent_event_id").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => continue,
+            };
+            let child_id = match row.get("child_event_id").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => continue,
+            };
+            // Look up the child event's stream_position
+            let pos = self
+                .get_event(child_id)
+                .await
+                .map(|e| e.stream_position)
+                .unwrap_or(0);
+            let entry = thread_latest.entry(parent).or_insert(0);
+            if pos > *entry {
+                *entry = pos;
+            }
+        }
+
+        // Sort by latest reply position descending
+        let mut threads: Vec<(String, i64)> = thread_latest.into_iter().collect();
+        threads.sort_by(|a, b| b.1.cmp(&a.1));
+        threads.truncate(limit);
+
+        Ok(threads.into_iter().map(|(root, _)| root).collect())
     }
 
     async fn store_report(&self, report: &ReportRecord) -> StorageResult<()> {
