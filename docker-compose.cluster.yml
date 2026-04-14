@@ -169,16 +169,17 @@ services:
   # per-instance (media is addressed by MXC URI, not instance).
 
   rustfs-0:
-    image: minio/minio:latest
+    image: rustfs/rustfs:latest
     restart: on-failure
     environment:
-      MINIO_ROOT_USER: maelstrom
-      MINIO_ROOT_PASSWORD: maelstrom-secret
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: maelstrom
+      RUSTFS_SECRET_KEY: maelstrom-secret
+      RUSTFS_VOLUMES: /data
+    command: server --address ":9000" --console-address ":9001" /data
     volumes:
       - rustfs0_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -187,16 +188,17 @@ services:
       - cluster
 
   rustfs-1:
-    image: minio/minio:latest
+    image: rustfs/rustfs:latest
     restart: on-failure
     environment:
-      MINIO_ROOT_USER: maelstrom
-      MINIO_ROOT_PASSWORD: maelstrom-secret
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: maelstrom
+      RUSTFS_SECRET_KEY: maelstrom-secret
+      RUSTFS_VOLUMES: /data
+    command: server --address ":9000" --console-address ":9001" /data
     volumes:
       - rustfs1_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -205,16 +207,17 @@ services:
       - cluster
 
   rustfs-2:
-    image: minio/minio:latest
+    image: rustfs/rustfs:latest
     restart: on-failure
     environment:
-      MINIO_ROOT_USER: maelstrom
-      MINIO_ROOT_PASSWORD: maelstrom-secret
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: maelstrom
+      RUSTFS_SECRET_KEY: maelstrom-secret
+      RUSTFS_VOLUMES: /data
+    command: server --address ":9000" --console-address ":9001" /data
     volumes:
       - rustfs2_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

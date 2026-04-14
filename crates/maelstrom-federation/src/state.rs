@@ -36,7 +36,7 @@ use maelstrom_core::matrix::error::MatrixError;
 use crate::FederationState;
 use crate::joins::compute_auth_chain;
 
-/// Build the state query sub-router with state, state_ids, and event endpoints.
+/// Build the state query sub-router with state, state_ids, event, and timestamp_to_event endpoints.
 pub fn routes() -> Router<FederationState> {
     Router::new()
         .route("/_matrix/federation/v1/state/{roomId}", get(get_room_state))
@@ -45,6 +45,10 @@ pub fn routes() -> Router<FederationState> {
             get(get_room_state_ids),
         )
         .route("/_matrix/federation/v1/event/{eventId}", get(get_event))
+        .route(
+            "/_matrix/federation/v1/timestamp_to_event/{roomId}",
+            get(timestamp_to_event),
+        )
 }
 
 /// Query parameters for state endpoints.
@@ -155,6 +159,43 @@ async fn get_room_state_ids(
     Ok(Json(serde_json::json!({
         "pdu_ids": pdu_ids,
         "auth_chain_ids": auth_chain_ids,
+    })))
+}
+
+/// Query parameters for timestamp_to_event.
+#[derive(Deserialize)]
+struct TimestampQuery {
+    ts: i64,
+    dir: String,
+}
+
+/// GET /_matrix/federation/v1/timestamp_to_event/{roomId} — find closest event to a timestamp.
+///
+/// Returns the event closest to the given timestamp in the specified direction.
+/// Per spec v1.6+, this helps servers and clients locate events near a point in time.
+async fn timestamp_to_event(
+    State(state): State<FederationState>,
+    Path(room_id): Path<String>,
+    Query(query): Query<TimestampQuery>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    debug!(room_id = %room_id, ts = query.ts, dir = %query.dir, "Federation timestamp_to_event request");
+
+    let events = state
+        .storage()
+        .get_room_events(&room_id, 0, 1000, if query.dir == "f" { "f" } else { "b" })
+        .await
+        .map_err(|_| MatrixError::not_found("Room not found"))?;
+
+    // Find the closest event to the target timestamp
+    let target_ts = query.ts;
+    let closest = events
+        .iter()
+        .min_by_key(|e| (e.origin_server_ts as i64 - target_ts).unsigned_abs())
+        .ok_or_else(|| MatrixError::not_found("No events found"))?;
+
+    Ok(Json(serde_json::json!({
+        "event_id": closest.event_id,
+        "origin_server_ts": closest.origin_server_ts,
     })))
 }
 

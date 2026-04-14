@@ -19,7 +19,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Server discovery](https://spec.matrix.org/v1.12/client-server-api/#server-discovery)
+//! * [Server discovery](https://spec.matrix.org/v1.18/client-server-api/#server-discovery)
 
 use axum::Json;
 use axum::Router;

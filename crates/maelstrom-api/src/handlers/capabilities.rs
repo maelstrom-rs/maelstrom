@@ -48,11 +48,11 @@
 //!
 //! # Matrix spec
 //!
-//! * [Capabilities negotiation](https://spec.matrix.org/v1.12/client-server-api/#capabilities-negotiation)
-//! * [Filtering](https://spec.matrix.org/v1.12/client-server-api/#filtering)
-//! * [Client config (account data)](https://spec.matrix.org/v1.12/client-server-api/#client-config)
-//! * [Push notifications](https://spec.matrix.org/v1.12/client-server-api/#push-notifications)
-//! * [Device management](https://spec.matrix.org/v1.12/client-server-api/#device-management)
+//! * [Capabilities negotiation](https://spec.matrix.org/v1.18/client-server-api/#capabilities-negotiation)
+//! * [Filtering](https://spec.matrix.org/v1.18/client-server-api/#filtering)
+//! * [Client config (account data)](https://spec.matrix.org/v1.18/client-server-api/#client-config)
+//! * [Push notifications](https://spec.matrix.org/v1.18/client-server-api/#push-notifications)
+//! * [Device management](https://spec.matrix.org/v1.18/client-server-api/#device-management)
 
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
@@ -165,7 +165,9 @@ async fn get_capabilities(_auth: AuthenticatedUser) -> Json<serde_json::Value> {
                     "8": "stable",
                     "9": "stable",
                     "10": "stable",
-                    "11": "stable"
+                    "11": "stable",
+                    "12": "stable",
+                    "13": "stable"
                 }
             }
         }
@@ -1172,7 +1174,11 @@ async fn delete_device(
 
     // Clean up device-specific local notification settings (MSC3890).
     // Must truly delete the record so GET returns 404 (not a sentinel).
-    let notif_key = format!("org.matrix.msc3890.local_notification_settings.{did}");
+    use maelstrom_core::matrix::room::account_data_type;
+    let notif_key = format!(
+        "{}{did}",
+        account_data_type::LOCAL_NOTIFICATION_SETTINGS_PREFIX
+    );
     if let Err(e) = state
         .storage()
         .delete_account_data(auth.user_id.as_ref(), None, &notif_key)

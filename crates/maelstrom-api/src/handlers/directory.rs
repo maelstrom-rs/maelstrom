@@ -26,8 +26,8 @@
 //!
 //! # Matrix spec
 //!
-//! * [Room aliases](https://spec.matrix.org/v1.12/client-server-api/#room-aliases)
-//! * [Listing rooms](https://spec.matrix.org/v1.12/client-server-api/#listing-rooms)
+//! * [Room aliases](https://spec.matrix.org/v1.18/client-server-api/#room-aliases)
+//! * [Listing rooms](https://spec.matrix.org/v1.18/client-server-api/#listing-rooms)
 
 use axum::extract::{Path, State};
 use axum::routing::{get, put};

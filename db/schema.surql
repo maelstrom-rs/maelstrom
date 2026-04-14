@@ -76,6 +76,7 @@ DEFINE TABLE IF NOT EXISTS member_of TYPE RELATION IN user OUT room SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS membership ON TABLE member_of TYPE string;
 DEFINE FIELD IF NOT EXISTS user_id    ON TABLE member_of TYPE string;  -- denormalized for query convenience
 DEFINE FIELD IF NOT EXISTS room_id    ON TABLE member_of TYPE string;  -- denormalized for query convenience
+DEFINE FIELD IF NOT EXISTS forgotten  ON TABLE member_of TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS updated_at ON TABLE member_of TYPE datetime DEFAULT time::now();
 
 DEFINE INDEX IF NOT EXISTS idx_member_of_in_out      ON TABLE member_of FIELDS in, out UNIQUE;

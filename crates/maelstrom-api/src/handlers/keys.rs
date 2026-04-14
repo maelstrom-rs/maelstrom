@@ -39,8 +39,8 @@
 //!
 //! # Matrix spec
 //!
-//! * [End-to-End Encryption](https://spec.matrix.org/v1.12/client-server-api/#end-to-end-encryption)
-//! * [Server-side key backups](https://spec.matrix.org/v1.12/client-server-api/#server-side-key-backups)
+//! * [End-to-End Encryption](https://spec.matrix.org/v1.18/client-server-api/#end-to-end-encryption)
+//! * [Server-side key backups](https://spec.matrix.org/v1.18/client-server-api/#server-side-key-backups)
 
 use axum::extract::State;
 use axum::routing::{get, post};

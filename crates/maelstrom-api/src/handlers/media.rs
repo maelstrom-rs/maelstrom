@@ -37,7 +37,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Content repository](https://spec.matrix.org/v1.12/client-server-api/#content-repository)
+//! * [Content repository](https://spec.matrix.org/v1.18/client-server-api/#content-repository)
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};

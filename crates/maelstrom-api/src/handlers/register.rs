@@ -1,7 +1,7 @@
 //! User registration and username availability.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 5.6 Registration](https://spec.matrix.org/v1.13/client-server-api/#registration)):
+//! ([spec: 5.6 Registration](https://spec.matrix.org/v1.18/client-server-api/#registration)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|

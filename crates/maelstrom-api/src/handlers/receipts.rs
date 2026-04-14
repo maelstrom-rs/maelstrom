@@ -21,7 +21,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Receipts](https://spec.matrix.org/v1.12/client-server-api/#receipts)
+//! * [Receipts](https://spec.matrix.org/v1.18/client-server-api/#receipts)
 
 use axum::extract::{Path, State};
 use axum::routing::post;

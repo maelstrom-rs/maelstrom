@@ -79,6 +79,9 @@ pub struct FederationState {
     inner: Arc<FederationStateInner>,
 }
 
+/// Callback for notifying the sync handler about room events from federation.
+pub type RoomNotifyFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Inner storage for [`FederationState`], held behind an `Arc` for cheap cloning.
 struct FederationStateInner {
     storage: Box<dyn Storage>,
@@ -86,6 +89,8 @@ struct FederationStateInner {
     signing_key: KeyPair,
     server_name: ServerName,
     federation_client: client::FederationClient,
+    /// Optional callback to notify sync when federation events arrive.
+    room_notify: Option<RoomNotifyFn>,
 }
 
 impl FederationState {
@@ -107,6 +112,7 @@ impl FederationState {
                 signing_key,
                 server_name,
                 federation_client: fed_client,
+                room_notify: None,
             }),
         }
     }
@@ -134,5 +140,33 @@ impl FederationState {
     /// Access the outbound federation HTTP client for making requests to other servers.
     pub fn client(&self) -> &client::FederationClient {
         &self.inner.federation_client
+    }
+
+    /// Notify the sync handler that a room has new events from federation.
+    pub fn notify_room(&self, room_id: &str) {
+        if let Some(ref f) = self.inner.room_notify {
+            f(room_id);
+        }
+    }
+
+    /// Create a new FederationState with a room notification callback.
+    pub fn with_room_notify(
+        storage: impl Storage,
+        ephemeral: Arc<EphemeralStore>,
+        signing_key: KeyPair,
+        server_name: ServerName,
+        notify: RoomNotifyFn,
+    ) -> Self {
+        let fed_client = client::FederationClient::new(signing_key.clone(), server_name.clone());
+        Self {
+            inner: Arc::new(FederationStateInner {
+                storage: Box::new(storage),
+                ephemeral,
+                signing_key,
+                server_name,
+                federation_client: fed_client,
+                room_notify: Some(notify),
+            }),
+        }
     }
 }

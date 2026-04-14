@@ -1,7 +1,7 @@
 //! Account management -- whoami, password change, and deactivation.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 5.7 Account](https://spec.matrix.org/v1.13/client-server-api/#account)):
+//! ([spec: 5.7 Account](https://spec.matrix.org/v1.18/client-server-api/#account)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|

@@ -18,7 +18,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Search](https://spec.matrix.org/v1.12/client-server-api/#search)
+//! * [Search](https://spec.matrix.org/v1.18/client-server-api/#search)
 
 use std::collections::HashSet;
 
@@ -171,9 +171,13 @@ async fn search(
                 return false;
             }
 
-            // Ensure the body contains the search term
+            // Ensure the body contains ALL words from the search term
             if let Some(body) = e.content.get("body").and_then(|b| b.as_str()) {
-                body.to_lowercase().contains(&search_lower)
+                let body_lower = body.to_lowercase();
+                // Tokenized matching: every word in the search term must appear in the body
+                search_lower
+                    .split_whitespace()
+                    .all(|word| body_lower.contains(word))
             } else {
                 false
             }
@@ -198,7 +202,10 @@ async fn search(
                     return false;
                 }
                 if let Some(body) = e.content.get("body").and_then(|b| b.as_str()) {
-                    body.to_lowercase().contains(&search_lower)
+                    let body_lower = body.to_lowercase();
+                    search_lower
+                        .split_whitespace()
+                        .all(|word| body_lower.contains(word))
                 } else {
                     false
                 }
@@ -290,9 +297,11 @@ async fn search(
         "highlights": highlights,
     });
 
-    // Always include next_batch so clients can attempt pagination.
-    // Per spec, next_batch is present when there may be more results.
-    room_events_response["next_batch"] = serde_json::json!(next_offset.to_string());
+    // Include next_batch when there are results. Omit when results are empty
+    // (no more pages). Clients use the absence of next_batch to detect the end.
+    if !filtered.is_empty() {
+        room_events_response["next_batch"] = serde_json::json!(next_offset.to_string());
+    }
 
     let response = serde_json::json!({
         "search_categories": {

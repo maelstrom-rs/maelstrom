@@ -13,7 +13,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Reporting content](https://spec.matrix.org/v1.12/client-server-api/#reporting-content)
+//! * [Reporting content](https://spec.matrix.org/v1.18/client-server-api/#reporting-content)
 
 use axum::extract::{Path, State};
 use axum::routing::post;

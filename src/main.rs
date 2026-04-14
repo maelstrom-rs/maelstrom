@@ -19,7 +19,7 @@
 //!    for `/sync` wake-ups and the in-memory rate limiter.
 //!
 //! 5. **Media store** (optional) -- Connects to the S3-compatible object store
-//!    (RustFS / MinIO) from the `[media]` section. If absent or unreachable,
+//!    (RustFS) from the `[media]` section. If absent or unreachable,
 //!    media endpoints return errors but the server still starts. When connected,
 //!    spawns the media retention background task.
 //!
@@ -94,7 +94,7 @@
 //!
 //! - **Maelstrom** container(s) behind a reverse proxy (Caddy/nginx)
 //! - **SurrealDB** as the primary data store
-//! - **RustFS** (or MinIO) for S3-compatible media storage
+//! - **RustFS**  for S3-compatible media storage
 //!
 //! Environment variable `MAELSTROM_CONFIG` points to the TOML config path
 //! inside the container (default `config/local.toml`).
@@ -146,7 +146,7 @@ struct DatabaseConfig {
     password: String,
 }
 
-/// S3-compatible object storage for media (RustFS / MinIO).
+/// S3-compatible object storage for media (RustFS).
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct MediaConfig {
@@ -406,12 +406,24 @@ async fn main() -> Result<()> {
     // Spawn the sender background loop
     tokio::spawn(transaction_sender.clone().run());
 
-    // Build federation state and router
-    let federation_state = maelstrom_federation::FederationState::new(
+    // Build federation state and router, with a callback to wake up sync on federation events
+    let notifier_for_fed = notifier.clone();
+    let room_notify: maelstrom_federation::RoomNotifyFn =
+        std::sync::Arc::new(move |room_id: &str| {
+            let notifier = notifier_for_fed.clone();
+            let room_id = room_id.to_string();
+            tokio::spawn(async move {
+                notifier
+                    .notify(maelstrom_api::notify::Notification::RoomEvent { room_id })
+                    .await;
+            });
+        });
+    let federation_state = maelstrom_federation::FederationState::with_room_notify(
         storage.clone(),
         ephemeral.clone(),
         signing_key,
         server_name.clone(),
+        room_notify,
     );
     let federation_router = maelstrom_federation::router::build(federation_state);
 

@@ -1,7 +1,7 @@
 //! Authentication handlers -- login, logout, and session management.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 5.5 Login](https://spec.matrix.org/v1.13/client-server-api/#login)):
+//! ([spec: 5.5 Login](https://spec.matrix.org/v1.18/client-server-api/#login)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|
@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use maelstrom_core::matrix::error::MatrixError;
 use maelstrom_core::matrix::id::{DeviceId, UserId};
+use maelstrom_core::matrix::room::account_data_type;
 use maelstrom_storage::traits::{DeviceRecord, StorageError};
 
 use crate::extractors::{AuthenticatedUser, MatrixJson};
@@ -281,6 +282,20 @@ async fn post_logout(
         .await
         .map_err(crate::extractors::storage_error)?;
 
+    // Clean up device-specific local notification settings (MSC3890)
+    let notif_key = format!(
+        "{}{}",
+        account_data_type::LOCAL_NOTIFICATION_SETTINGS_PREFIX,
+        device_id
+    );
+    if let Err(e) = state
+        .storage()
+        .delete_account_data(auth.user_id.as_ref(), None, &notif_key)
+        .await
+    {
+        tracing::warn!(user = %auth.user_id, key = %notif_key, error = %e, "Failed to delete device notification settings on logout");
+    }
+
     // Record device list change and notify remote servers
     let change_pos = state.storage().current_stream_position().await.unwrap_or(0);
     let _ = state
@@ -327,11 +342,31 @@ async fn post_logout_all(
 ) -> Result<Json<serde_json::Value>, MatrixError> {
     let user_id = auth.user_id.to_string();
 
+    // Get device list before removal so we can clean up notification settings
+    let devices = state
+        .storage()
+        .list_devices(&auth.user_id)
+        .await
+        .unwrap_or_default();
+
     state
         .storage()
         .remove_all_devices(&auth.user_id)
         .await
         .map_err(crate::extractors::storage_error)?;
+
+    // Clean up device-specific local notification settings (MSC3890) for all devices
+    for dev in &devices {
+        let notif_key = format!(
+            "{}{}",
+            account_data_type::LOCAL_NOTIFICATION_SETTINGS_PREFIX,
+            dev.device_id
+        );
+        let _ = state
+            .storage()
+            .delete_account_data(auth.user_id.as_ref(), None, &notif_key)
+            .await;
+    }
 
     // Record device list change and notify remote servers (all devices removed)
     let change_pos = state.storage().current_stream_position().await.unwrap_or(0);

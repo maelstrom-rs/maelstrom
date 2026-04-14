@@ -21,7 +21,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Knocking on rooms](https://spec.matrix.org/v1.12/client-server-api/#knocking-on-rooms)
+//! * [Knocking on rooms](https://spec.matrix.org/v1.18/client-server-api/#knocking-on-rooms)
 
 use axum::extract::{Path, State};
 use axum::routing::post;

@@ -21,7 +21,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Send-to-Device messaging](https://spec.matrix.org/v1.12/client-server-api/#send-to-device-messaging)
+//! * [Send-to-Device messaging](https://spec.matrix.org/v1.18/client-server-api/#send-to-device-messaging)
 
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@
 //!
 //! [`MediaClient`] wraps the AWS S3 SDK (`aws-sdk-s3`) to provide a simple
 //! async interface for media CRUD operations against any S3-compatible store
-//! (RustFS, MinIO, AWS S3, etc.).
+//! (RustFS, AWS S3, etc.).
 //!
 //! ## Connection
 //!

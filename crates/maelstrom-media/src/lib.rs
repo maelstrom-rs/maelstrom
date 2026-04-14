@@ -4,7 +4,7 @@
 //! Repository API (`/_matrix/media/`):
 //!
 //! - **Storage** ([`client::MediaClient`]) -- Wraps the AWS S3 SDK to talk to any
-//!   S3-compatible object store (RustFS in production, MinIO for local dev).
+//!   S3-compatible object store (RustFS).
 //!   Media objects are keyed by `{server_name}/{media_id}` inside a single bucket,
 //!   matching the MXC URI scheme (`mxc://server/media_id`).
 //!

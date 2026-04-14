@@ -3,7 +3,7 @@ use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 /// The standard Matrix JSON error response body
-/// ([spec](https://spec.matrix.org/v1.13/client-server-api/#standard-error-response)).
+/// ([spec](https://spec.matrix.org/v1.18/client-server-api/#standard-error-response)).
 ///
 /// Every failed Matrix API call returns a JSON object with at least two
 /// fields: `errcode` (a machine-readable `M_*` error code) and `error`

@@ -190,6 +190,15 @@ pub mod event_type {
     pub const POLL_END: &str = "org.matrix.msc3381.poll.end";
 }
 
+/// Well-known Matrix account data type constants.
+pub mod account_data_type {
+    /// MSC3890: per-device local notification settings prefix.
+    /// Append the device ID to form the full key, e.g.
+    /// `org.matrix.msc3890.local_notification_settings.ABCDEF1234`.
+    pub const LOCAL_NOTIFICATION_SETTINGS_PREFIX: &str =
+        "org.matrix.msc3890.local_notification_settings.";
+}
+
 // ── JoinRule ────────────────────────────────────────────────────────────
 
 /// Controls who is allowed to join a room.
@@ -482,8 +491,8 @@ impl PowerLevelContent {
 /// * [`supports_restricted_join`](RoomVersion::supports_restricted_join) -- restricted joins (v8+).
 /// * [`has_creator_field`](RoomVersion::has_creator_field) -- `creator` in create content (v1-v10; removed in v11).
 ///
-/// The server currently recognizes versions 1 through 11.  The default for new rooms is
-/// [`V10`](RoomVersion::V10).
+/// The server currently recognizes versions 1 through 13.  The default for new rooms is
+/// [`V11`](RoomVersion::V11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RoomVersion {
     V1,
@@ -497,6 +506,8 @@ pub enum RoomVersion {
     V9,
     V10,
     V11,
+    V12,
+    V13,
 }
 
 /// How event IDs are generated for a given room version.
@@ -550,6 +561,8 @@ impl RoomVersion {
             "9" => Some(Self::V9),
             "10" => Some(Self::V10),
             "11" => Some(Self::V11),
+            "12" => Some(Self::V12),
+            "13" => Some(Self::V13),
             _ => None,
         }
     }
@@ -568,6 +581,8 @@ impl RoomVersion {
             Self::V9 => "9",
             Self::V10 => "10",
             Self::V11 => "11",
+            Self::V12 => "12",
+            Self::V13 => "13",
         }
     }
 
@@ -598,7 +613,7 @@ impl RoomVersion {
     /// Which redaction algorithm to use (determines which content fields survive redaction).
     pub const fn redaction_algorithm(&self) -> RedactionAlgorithm {
         match self {
-            Self::V11 => RedactionAlgorithm::V2,
+            Self::V11 | Self::V12 | Self::V13 => RedactionAlgorithm::V2,
             _ => RedactionAlgorithm::V1,
         }
     }
@@ -634,7 +649,7 @@ impl RoomVersion {
     /// Whether the `m.room.create` content includes a `creator` field.
     /// V11 removed this field; the event's `sender` is used instead.
     pub const fn has_creator_field(&self) -> bool {
-        !matches!(self, Self::V11)
+        !matches!(self, Self::V11 | Self::V12 | Self::V13)
     }
 
     /// Return a slice of all recognized room versions (V1 through V11).
@@ -651,12 +666,14 @@ impl RoomVersion {
             Self::V9,
             Self::V10,
             Self::V11,
+            Self::V12,
+            Self::V13,
         ]
     }
 
-    /// The default room version for newly created rooms (currently V10).
+    /// The default room version for newly created rooms (currently V11).
     pub const fn default_version() -> Self {
-        Self::V10
+        Self::V11
     }
 }
 

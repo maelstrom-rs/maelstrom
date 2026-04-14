@@ -23,7 +23,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Spaces](https://spec.matrix.org/v1.12/client-server-api/#spaces)
+//! * [Spaces](https://spec.matrix.org/v1.18/client-server-api/#spaces)
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;

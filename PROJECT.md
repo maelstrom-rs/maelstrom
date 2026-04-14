@@ -792,7 +792,7 @@ tests/
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
 | SurrealDB v3 stability (alpha/early release) | Data loss, query bugs | Pin exact version, comprehensive test coverage, file bugs upstream, keep storage trait abstraction so backend can be swapped |
-| RustFS maturity (alpha) | Media reliability | S3 interface means MinIO is a drop-in fallback. Abstract behind aws-sdk-s3 |
+| RustFS maturity (alpha) | Media reliability | S3 interface abstracts the backend via aws-sdk-s3 |
 | Matrix spec complexity | Missed edge cases | Complement tests catch spec violations. Start with core flows, expand incrementally |
 | State resolution correctness | Federation breakage | Port well-tested algorithms from Synapse/Conduwuit. Extensive property-based testing |
 | Horizontal scaling edge cases | Data inconsistency | Test multi-instance scenarios from Phase 1. SurrealDB+TiKV provides strong consistency |

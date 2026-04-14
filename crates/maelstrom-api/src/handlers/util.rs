@@ -195,6 +195,39 @@ pub async fn servers_sharing_rooms(
     servers.into_iter().collect()
 }
 
+/// Get remote servers in a specific room by inspecting member server names.
+pub async fn remote_servers_in_room(
+    storage: &dyn maelstrom_storage::traits::Storage,
+    room_id: &str,
+    local_server: &str,
+) -> Vec<String> {
+    let mut servers = std::collections::HashSet::new();
+    if let Ok(members) = storage.get_room_members(room_id, "join").await {
+        for member in members {
+            let server = maelstrom_core::matrix::id::server_name_from_sigil_id(&member);
+            if !server.is_empty() && server != local_server {
+                servers.insert(server.to_string());
+            }
+        }
+    }
+    servers.into_iter().collect()
+}
+
+/// Queue an event for delivery to all remote servers in the room via federation.
+pub async fn federate_event(
+    state: &crate::state::AppState,
+    room_id: &str,
+    event: &maelstrom_core::matrix::event::Pdu,
+) {
+    if let Some(sender) = state.transaction_sender() {
+        let remote_servers =
+            remote_servers_in_room(state.storage(), room_id, state.server_name().as_str()).await;
+        for server in remote_servers {
+            sender.queue_pdu(&server, event);
+        }
+    }
+}
+
 /// Percent-encode a string for safe inclusion in URL path segments.
 ///
 /// Used when embedding room IDs, event IDs, or user IDs (which contain

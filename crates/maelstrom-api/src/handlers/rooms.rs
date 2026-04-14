@@ -1,7 +1,7 @@
 //! Room lifecycle -- create, join, leave, invite, ban, kick, forget, and upgrade.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 8 Rooms](https://spec.matrix.org/v1.13/client-server-api/#rooms)):
+//! ([spec: 8 Rooms](https://spec.matrix.org/v1.18/client-server-api/#rooms)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|

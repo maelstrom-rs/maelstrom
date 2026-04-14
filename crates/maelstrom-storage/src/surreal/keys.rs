@@ -223,7 +223,7 @@ impl KeyStore for SurrealStorage {
                             .query(
                                 "SELECT key_id, key_data FROM one_time_key \
                                  WHERE user_id = $uid AND device_id = $did AND string::starts_with(key_id, $prefix) \
-                                 ORDER BY key_id ASC LIMIT 1",
+                                 ORDER BY key_id DESC LIMIT 1",
                             )
                             .bind(("uid", uid.clone()))
                             .bind(("did", did.clone()))

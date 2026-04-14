@@ -1,7 +1,7 @@
 //! Event operations -- send, retrieve, paginate, state management, and redaction.
 //!
 //! Implements the following Matrix Client-Server API endpoints
-//! ([spec: 9 Events](https://spec.matrix.org/v1.13/client-server-api/#events-2)):
+//! ([spec: 9 Events](https://spec.matrix.org/v1.18/client-server-api/#events-2)):
 //!
 //! | Method | Path | Handler |
 //! |--------|------|---------|
@@ -125,6 +125,10 @@ pub fn routes() -> Router<AppState> {
             .route(
                 &format!("{prefix}/rooms/{{roomId}}/redact/{{eventId}}/{{txnId}}"),
                 put(redact_event),
+            )
+            .route(
+                &format!("{prefix}/rooms/{{roomId}}/timestamp_to_event"),
+                get(timestamp_to_event),
             );
     }
 
@@ -378,6 +382,15 @@ async fn get_messages(
     // Check user is a member (or was a member)
     let membership = require_membership(storage, &sender, &room_id).await?;
 
+    // Forgotten rooms must not be accessible (spec: CS API § 8.4)
+    if storage
+        .is_room_forgotten(&sender, &room_id)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(MatrixError::forbidden("You have forgotten this room"));
+    }
+
     let dir = query.dir.as_deref().unwrap_or("b");
     let limit = query.limit.unwrap_or(10).min(100);
     let from: i64 = match query.from.as_deref().and_then(|s| s.parse().ok()) {
@@ -404,8 +417,11 @@ async fn get_messages(
             None
         };
 
+    // Fetch extra events to account for state events that will be filtered out
+    // (we exclude non-member state events from the messages response).
+    let fetch_limit = limit * 2 + 10;
     let mut events = storage
-        .get_room_events(&room_id, from, limit, dir)
+        .get_room_events(&room_id, from, fetch_limit, dir)
         .await
         .map_err(crate::extractors::storage_error)?;
 
@@ -486,7 +502,6 @@ async fn get_messages(
     };
 
     let start = query.from.unwrap_or_else(|| from.to_string());
-    let end = events.last().map(|e| e.stream_position.to_string());
 
     // Parse filter JSON
     let filter_json: Option<serde_json::Value> = query
@@ -499,8 +514,8 @@ async fn get_messages(
         .and_then(|f| f.get("lazy_load_members")?.as_bool())
         .unwrap_or(false);
 
-    // Check for related_by_rel_types filter (MSC3874)
-    let rel_type_filter: Option<Vec<String>> = filter_json
+    // Check for related_by_rel_types filter — events with child relations of the given type
+    let related_by_rel_types: Option<Vec<String>> = filter_json
         .as_ref()
         .and_then(|f| f.get("related_by_rel_types"))
         .and_then(|v| v.as_array())
@@ -510,9 +525,39 @@ async fn get_messages(
                 .collect()
         });
 
-    // If rel_type filter is set, build a set of event IDs that have matching relations
+    // MSC3874: org.matrix.msc3874.rel_types — only include events that THEMSELVES
+    // have a m.relates_to with one of the given relation types
+    let own_rel_type_filter: Option<Vec<String>> = filter_json
+        .as_ref()
+        .and_then(|f| {
+            f.get("org.matrix.msc3874.rel_types")
+                .or_else(|| f.get("rel_types"))
+        })
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+
+    // MSC3874: org.matrix.msc3874.not_rel_types — exclude events that have
+    // a m.relates_to with one of the given relation types
+    let own_not_rel_type_filter: Option<Vec<String>> = filter_json
+        .as_ref()
+        .and_then(|f| {
+            f.get("org.matrix.msc3874.not_rel_types")
+                .or_else(|| f.get("not_rel_types"))
+        })
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+
+    // If related_by_rel_types filter is set, build a set of event IDs that have matching child relations
     let related_event_ids: Option<std::collections::HashSet<String>> =
-        if let Some(ref rel_types) = rel_type_filter {
+        if let Some(ref rel_types) = related_by_rel_types {
             let mut ids = std::collections::HashSet::new();
             for event in &events {
                 for rel_type in rel_types {
@@ -530,18 +575,58 @@ async fn get_messages(
             None
         };
 
-    // Include message events and membership events, but exclude other state events
-    let chunk: Vec<serde_json::Value> = events
+    // Include message events and membership events, but exclude other state events.
+    // Collect both the JSON and stream_position so we can compute `end` correctly.
+    let filtered_events: Vec<&Pdu> = events
         .iter()
         .filter(|e| !e.is_state() || e.event_type == et::MEMBER)
         .filter(|e| {
-            // If rel_type filter is active, only include events with matching relations
-            if let Some(ref ids) = related_event_ids {
-                ids.contains(&e.event_id)
-            } else {
-                true
+            // related_by_rel_types: only include events with matching child relations
+            if let Some(ref ids) = related_event_ids
+                && !ids.contains(&e.event_id)
+            {
+                return false;
             }
+            // org.matrix.msc3874.rel_types: only include events with own relation type
+            if let Some(ref rel_types) = own_rel_type_filter {
+                let event_rel_type = e
+                    .content
+                    .get("m.relates_to")
+                    .and_then(|r| r.get("rel_type"))
+                    .and_then(|v| v.as_str());
+                match event_rel_type {
+                    Some(rt) => {
+                        if !rel_types.iter().any(|f| f == rt) {
+                            return false;
+                        }
+                    }
+                    None => return false, // No relation = excluded
+                }
+            }
+            // org.matrix.msc3874.not_rel_types: exclude events with own relation type
+            if let Some(ref not_rel_types) = own_not_rel_type_filter {
+                let event_rel_type = e
+                    .content
+                    .get("m.relates_to")
+                    .and_then(|r| r.get("rel_type"))
+                    .and_then(|v| v.as_str());
+                if let Some(rt) = event_rel_type
+                    && not_rel_types.iter().any(|f| f == rt)
+                {
+                    return false;
+                }
+            }
+            true
         })
+        .take(limit)
+        .collect();
+
+    let end = filtered_events
+        .last()
+        .map(|e| e.stream_position.to_string());
+
+    let chunk: Vec<serde_json::Value> = filtered_events
+        .iter()
         .map(|e| {
             e.to_client_event()
                 .with_membership(Membership::Join.as_str())
@@ -1074,4 +1159,46 @@ async fn extract_and_store_relation(storage: &dyn maelstrom_storage::traits::Sto
     };
 
     let _ = storage.store_relation(&relation).await;
+}
+
+// -- GET /rooms/{roomId}/timestamp_to_event --
+
+/// Query parameters for the timestamp_to_event endpoint.
+#[derive(Deserialize)]
+struct TimestampToEventQuery {
+    ts: i64,
+    dir: String,
+}
+
+/// GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event
+///
+/// Find the closest event to the given timestamp in a room.
+/// Returns the event_id and origin_server_ts of the closest event.
+async fn timestamp_to_event(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(room_id): Path<String>,
+    Query(query): Query<TimestampToEventQuery>,
+) -> Result<Json<serde_json::Value>, MatrixError> {
+    let storage = state.storage();
+    let sender = auth.user_id.to_string();
+
+    // Check user has access to this room
+    let _membership = require_membership(storage, &sender, &room_id).await?;
+
+    let events = storage
+        .get_room_events(&room_id, 0, 1000, if query.dir == "f" { "f" } else { "b" })
+        .await
+        .map_err(|_| MatrixError::not_found("Room not found"))?;
+
+    let target_ts = query.ts;
+    let closest = events
+        .iter()
+        .min_by_key(|e| (e.origin_server_ts as i64 - target_ts).unsigned_abs())
+        .ok_or_else(|| MatrixError::not_found("No events found"))?;
+
+    Ok(Json(serde_json::json!({
+        "event_id": closest.event_id,
+        "origin_server_ts": closest.origin_server_ts,
+    })))
 }

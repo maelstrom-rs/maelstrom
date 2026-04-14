@@ -23,7 +23,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Presence](https://spec.matrix.org/v1.12/client-server-api/#presence)
+//! * [Presence](https://spec.matrix.org/v1.18/client-server-api/#presence)
 
 use axum::extract::{Path, State};
 use axum::routing::get;

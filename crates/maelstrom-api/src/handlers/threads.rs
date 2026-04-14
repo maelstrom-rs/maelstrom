@@ -16,7 +16,7 @@
 //!
 //! # Matrix spec
 //!
-//! * [Threads](https://spec.matrix.org/v1.12/client-server-api/#threading)
+//! * [Threads](https://spec.matrix.org/v1.18/client-server-api/#threading)
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
